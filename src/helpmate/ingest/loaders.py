@@ -4,12 +4,26 @@ from bs4 import BeautifulSoup
 _DROP = ["script", "style", "nav", "footer", "header", "aside", "noscript"]
 
 
+_HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+
+
 def clean_html(html: str) -> str:
-    """Extract readable main text from an HTML page, dropping chrome."""
+    """Extract readable main text from an HTML page, dropping chrome.
+
+    Headings <h1>..<h6> are emitted as Markdown-style '#'-prefixed lines
+    (level = heading number) so downstream section splitting can detect them.
+    """
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(_DROP):
         tag.decompose()
     root = soup.find("main") or soup.body or soup
+
+    # Turn each heading into a Markdown-style '#'-prefixed line in place, so
+    # get_text() renders it as e.g. "# DJI Care" instead of a bare line.
+    for h in root.find_all(_HEADINGS):
+        level = int(h.name[1])
+        h.string = "#" * level + " " + h.get_text(separator=" ").strip()
+
     text = root.get_text(separator="\n")
     lines = [ln.strip() for ln in text.splitlines()]
     return "\n".join(ln for ln in lines if ln)
