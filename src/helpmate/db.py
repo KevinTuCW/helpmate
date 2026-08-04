@@ -8,21 +8,25 @@ def _conn():
     return psycopg.connect(get_settings().database_url)
 
 
-def insert_document(source: str, title: str) -> int:
+def insert_document(source_url: str, title: str, doc_type: str,
+                    product: str | None, lang: str = "zh") -> int:
     with _conn() as c, c.cursor() as cur:
         cur.execute(
-            "INSERT INTO documents (source, title) VALUES (%s, %s) RETURNING id",
-            (source, title),
+            "INSERT INTO documents (source_url, title, doc_type, product, lang) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (source_url, title, doc_type, product, lang),
         )
         return cur.fetchone()[0]
 
 
-def insert_chunk(document_id: int, chunk_index: int, content: str, embedding: list[float]) -> None:
+def insert_chunk_row(document_id: int, ch: dict) -> None:
     with _conn() as c, c.cursor() as cur:
         cur.execute(
-            "INSERT INTO chunks (document_id, chunk_index, content, embedding) "
-            "VALUES (%s, %s, %s, %s)",
-            (document_id, chunk_index, content, json.dumps(embedding)),
+            "INSERT INTO chunks (document_id, chunk_index, content, section_title, "
+            "doc_type, product, source_url, lang) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (document_id, ch["chunk_index"], ch["content"], ch.get("section_title"),
+             ch["doc_type"], ch.get("product"), ch.get("source_url"), ch.get("lang", "zh")),
         )
 
 

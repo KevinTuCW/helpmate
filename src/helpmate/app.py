@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pathlib import Path
@@ -26,12 +26,9 @@ class ChatReq(BaseModel):
 
 @app.post("/ingest")
 def ingest(req: IngestReq):
-    embedder = get_embedder()
-    doc_id = db.insert_document(req.source, req.title)
-    chunks = chunk_text(req.text)
-    for ch in chunks:
-        db.insert_chunk(doc_id, ch["chunk_index"], ch["content"], embedder.embed(ch["content"]))
-    return {"document_id": doc_id, "chunks": len(chunks)}
+    # v2: batch corpus ingestion runs via ingest.pipeline (see scripts/).
+    # The HTTP ingest endpoint is re-wired with embeddings in phase 2.
+    raise HTTPException(status_code=501, detail="use ingest.pipeline; endpoint rewired in phase 2")
 
 
 @app.post("/chat")
