@@ -16,8 +16,10 @@ CREATE TABLE IF NOT EXISTS chunks (
     UNIQUE (document_id, chunk_index)
 );
 
+-- HNSW: good recall out of the box, no lists tuning, and (unlike ivfflat with
+-- a high lists count on a tiny table) never returns an empty probe.
 CREATE INDEX IF NOT EXISTS chunks_embedding_idx
-    ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+    ON chunks USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE IF NOT EXISTS orders (
     order_id    TEXT PRIMARY KEY,
