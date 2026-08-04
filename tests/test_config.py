@@ -4,7 +4,7 @@ from helpmate.config import Settings, GLM_BASE_URL
 def test_settings_defaults():
     s = Settings(_env_file=None)
     assert s.top_k == 4
-    assert s.embed_dim == 1536
+    assert s.embed_dim == 1024
     assert s.llm_provider == "openai"
 
 

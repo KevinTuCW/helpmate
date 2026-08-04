@@ -4,7 +4,6 @@ from pydantic import BaseModel
 from pathlib import Path
 
 from helpmate.config import get_settings
-from helpmate.ingest import chunk_text
 from helpmate import db
 from helpmate.tools import dispatch_tool
 from helpmate.providers import get_embedder, OpenAILLM

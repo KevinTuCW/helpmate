@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     embed_provider: str = "openai"         # "openai" | "glm" | "local"
     embed_model: str = "text-embedding-3-small"
-    embed_dim: int = 1536
+    embed_dim: int = 1024
     openai_api_key: str = ""
     glm_api_key: str = ""
     top_k: int = 4
