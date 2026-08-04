@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     llm_provider: str = "openai"          # "openai" | "glm" (any OpenAI-compatible)
     llm_base_url: str = ""                 # explicit override; blank = provider default
     llm_model: str = "gpt-4o-mini"
+    embed_provider: str = "openai"         # "openai" | "glm" | "local"
     embed_model: str = "text-embedding-3-small"
     embed_dim: int = 1536
     openai_api_key: str = ""

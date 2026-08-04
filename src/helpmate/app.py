@@ -7,7 +7,7 @@ from helpmate.config import get_settings
 from helpmate.ingest import chunk_text
 from helpmate import db
 from helpmate.tools import dispatch_tool
-from helpmate.providers import OpenAIEmbedder, OpenAILLM
+from helpmate.providers import get_embedder, OpenAILLM
 from helpmate.graph import build_graph
 
 app = FastAPI(title="helpmate")
@@ -26,7 +26,7 @@ class ChatReq(BaseModel):
 
 @app.post("/ingest")
 def ingest(req: IngestReq):
-    embedder = OpenAIEmbedder()
+    embedder = get_embedder()
     doc_id = db.insert_document(req.source, req.title)
     chunks = chunk_text(req.text)
     for ch in chunks:
@@ -37,7 +37,7 @@ def ingest(req: IngestReq):
 @app.post("/chat")
 def chat(req: ChatReq):
     settings = get_settings()
-    embedder = OpenAIEmbedder()
+    embedder = get_embedder()
     run = build_graph(
         retriever=lambda q: db.search(embedder.embed(q), settings.top_k),
         tool_dispatch=lambda name, args: dispatch_tool(
