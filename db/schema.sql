@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     chunk_index INT NOT NULL,
     content     TEXT NOT NULL,
-    embedding   VECTOR(1536),
+    embedding   VECTOR(:dim),
     UNIQUE (document_id, chunk_index)
 );
 

@@ -3,10 +3,16 @@ from typing import Optional
 from helpmate.config import get_settings
 
 
+def _client():
+    """An OpenAI-compatible client pointed at the configured provider (OpenAI or GLM)."""
+    from openai import OpenAI
+    s = get_settings()
+    return OpenAI(base_url=s.resolved_base_url(), api_key=s.resolved_api_key() or None)
+
+
 class OpenAIEmbedder:
     def __init__(self) -> None:
-        from openai import OpenAI
-        self._c = OpenAI()
+        self._c = _client()
         self._model = get_settings().embed_model
 
     def embed(self, text: str) -> list[float]:
@@ -15,8 +21,7 @@ class OpenAIEmbedder:
 
 class OpenAILLM:
     def __init__(self) -> None:
-        from openai import OpenAI
-        self._c = OpenAI()
+        self._c = _client()
         self._model = get_settings().llm_model
 
     def complete(self, prompt: str) -> str:

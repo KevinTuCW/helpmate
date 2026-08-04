@@ -30,9 +30,9 @@ runs it; the result is fed back to the model to phrase the final answer.
 
 ```bash
 docker compose up -d db        # Postgres + pgvector
-cp .env.example .env           # set OPENAI_API_KEY (or point to Ollama)
+cp .env.example .env           # set a provider: OpenAI or GLM (智谱)
 pip install -e ".[dev]"
-psql "$DATABASE_URL" -f db/schema.sql
+psql "$DATABASE_URL" -v dim=1536 -f db/schema.sql   # dim must match EMBED_DIM
 psql "$DATABASE_URL" -f db/seed.sql
 uvicorn helpmate.app:app --reload
 ```
