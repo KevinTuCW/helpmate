@@ -1,3 +1,4 @@
+import fitz  # pymupdf
 from bs4 import BeautifulSoup
 
 _DROP = ["script", "style", "nav", "footer", "header", "aside", "noscript"]
@@ -24,3 +25,27 @@ def table_to_markdown(rows: list[list[str]]) -> str:
     for r in body:
         out.append("| " + " | ".join(r) + " |")
     return "\n".join(out)
+
+
+def load_pdf(path: str) -> list[dict]:
+    """Extract text and tables from a PDF as ordered blocks.
+
+    Each block: {"type": "text"|"table", "text": str, "page": int}.
+    Tables are serialized to Markdown so they survive chunking intact.
+    """
+    blocks: list[dict] = []
+    doc = fitz.open(path)
+    for pno, page in enumerate(doc):
+        try:
+            tables = page.find_tables()
+            for t in tables.tables:
+                md = table_to_markdown([[c or "" for c in row] for row in t.extract()])
+                if md:
+                    blocks.append({"type": "table", "text": md, "page": pno})
+        except Exception:
+            pass  # find_tables can fail on odd layouts; text still captured below
+        text = page.get_text().strip()
+        if text:
+            blocks.append({"type": "text", "text": text, "page": pno})
+    doc.close()
+    return blocks
