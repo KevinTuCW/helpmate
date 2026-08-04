@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>helpmate</title>
+<style>body{font-family:system-ui;max-width:640px;margin:40px auto;padding:0 16px}
+#log{white-space:pre-wrap;border:1px solid #ccc;border-radius:8px;padding:16px;min-height:120px}
+input{width:78%;padding:8px} button{padding:8px 16px}</style></head>
+<body>
+<h1>helpmate</h1>
+<div id="log">Ask about your knowledge base — or an order like "Where is order A1001?"</div>
+<p><input id="q" placeholder="Your question..."><button onclick="ask()">Ask</button></p>
+<script>
+async function ask(){
+  const q=document.getElementById('q').value, log=document.getElementById('log');
+  log.textContent='...';
+  const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({question:q})});
+  const d=await r.json(); log.textContent=d.answer;
+}
+</script>
+</body></html>
