@@ -15,6 +15,8 @@ dependencies = [
   "beautifulsoup4>=4.12",
   "pymupdf>=1.24",
   "langfuse>=4.14",
+  "ragas>=0.2",            # eval generation-quality metrics (eval_generate=True path)
+  "langchain-openai>=0.2",
 ]
 
 [project.optional-dependencies]

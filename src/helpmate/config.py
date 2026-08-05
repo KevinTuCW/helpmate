@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     # evaluation
     eval_recall_k: int = 5                        # k for recall@k / ndcg@k
+    eval_generate: bool = False                   # run generation-dependent metrics (citation/RAGAS); slow with glm-4.7
     eval_thresholds: dict = {"recall_at_k": 0.7, "tool_routing": 0.9,
                              "faithfulness": 0.7, "answer_relevancy": 0.7}
 
