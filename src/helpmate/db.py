@@ -76,3 +76,32 @@ def update_embedding(chunk_id: int, embedding: list[float]) -> None:
     with _conn() as c, c.cursor() as cur:
         cur.execute("UPDATE chunks SET embedding = %s WHERE id = %s",
                     (json.dumps(embedding), chunk_id))
+
+
+def _hit_row(r) -> dict:
+    return {"chunk_id": r[0], "content": r[1], "section_title": r[2],
+            "source_url": r[3], "doc_title": r[4], "doc_type": r[5]}
+
+
+def dense_search(embedding: list[float], n: int) -> list[dict]:
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT ch.id, ch.content, ch.section_title, ch.source_url, d.title, ch.doc_type "
+            "FROM chunks ch JOIN documents d ON d.id = ch.document_id "
+            "WHERE ch.embedding IS NOT NULL "
+            "ORDER BY ch.embedding <=> %s::vector LIMIT %s",
+            (json.dumps(embedding), n),
+        )
+        return [_hit_row(r) for r in cur.fetchall()]
+
+
+def fts_search(query: str, n: int) -> list[dict]:
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT ch.id, ch.content, ch.section_title, ch.source_url, d.title, ch.doc_type "
+            "FROM chunks ch JOIN documents d ON d.id = ch.document_id "
+            "WHERE ch.content_tsv @@ websearch_to_tsquery('simple', %s) "
+            "ORDER BY ts_rank_cd(ch.content_tsv, websearch_to_tsquery('simple', %s)) DESC LIMIT %s",
+            (query, query, n),
+        )
+        return [_hit_row(r) for r in cur.fetchall()]
