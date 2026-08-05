@@ -33,8 +33,8 @@ the copilot is exposed in a self-service widget.
 
 - Real Chinese DJI corpus (manuals / FAQs / policies), structure-aware ingestion
   (HTML + PDF tables), rich chunk metadata.
-- Hybrid retrieval (dense + lexical) + reranking; citations.
-- Function-calling tools for orders/logistics.
+- Hybrid retrieval (dense + lexical) + reranking; citations. **(primary path)**
+- Function-calling tools for orders/logistics. **(auxiliary — minority of queries)**
 - Langfuse tracing; reproducible eval harness with a threshold gate.
 
 ## Non-goals (v2)

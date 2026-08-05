@@ -1,9 +1,11 @@
 # helpmate — Architecture
 
 A single FastAPI service with two entry points: `/ingest` (build the knowledge
-base) and `/chat` (answer a question). Answering is orchestrated by a LangGraph
-state machine that decides between a live tool call and a hybrid knowledge-base
-retrieval, then generates a cited answer. Every request is traced in Langfuse.
+base) and `/chat` (answer a question). The **primary path is knowledge-base
+question answering** (hybrid retrieval → rerank → cited generation); a LangGraph
+state machine **defaults to retrieval** and only branches to an **auxiliary**
+tool call for the minority of order/logistics queries. Every request is traced
+in Langfuse.
 
 ## System overview
 
@@ -61,11 +63,14 @@ Hybrid, so Chinese semantics and English proper nouns are both covered:
 - Prompt constrains answers to the provided context and preserves `[n]` citations;
   refuses when context is insufficient.
 
-## Function calling (`tools.py`)
+## Function calling (`tools.py`) — auxiliary
 
-Tools declared in OpenAI `tools` JSON-Schema format (`query_order`,
-`query_logistics`). `route` uses the model's native tool-choice; `dispatch_tool`
-runs the selected tool against `orders`/`shipments`. Tool results feed `generate`.
+An **auxiliary** capability, not the main path: it only serves the minority of
+real-time order/logistics queries; everything else goes through knowledge-base
+retrieval. Tools are declared in OpenAI `tools` JSON-Schema format (`query_order`,
+`query_logistics`). `route` uses the model's native tool-choice (defaulting to
+retrieval); `dispatch_tool` runs the selected tool against `orders`/`shipments`.
+Tool results feed `generate`.
 
 ## Data model
 

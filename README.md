@@ -2,7 +2,7 @@
 
 # 🛟 helpmate
 
-**生产级企业知识库智能客服** —— 真实中文语料 · 混合检索 + 重排 · 工具调用 · 全链路可观测 · 可复现评测
+**生产级企业知识库智能客服** —— 真实中文语料 · 混合检索 + 重排 · 带引用问答 · 全链路可观测 · 可复现评测（工具调用为辅）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#-许可证)
 [![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
@@ -18,7 +18,7 @@
 
 ---
 
-helpmate 是一个能「上线」的企业知识库客服系统：以 **DJI 大疆公开中文文档**（用户手册 / FAQ / 售后政策）为知识库，用**混合检索 + 重排**把问题答准并给出引用，用 **Function Calling** 处理订单/物流类查询，全流程在 **Langfuse** 可观测，并配一套**人工校验 golden set + 评测门禁**。它不是 demo —— 语料是真的，检索是混合的，指标是量化的。
+helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线是知识问答</strong>：以 **DJI 大疆公开中文文档**（用户手册 / FAQ / 售后政策）为知识库，用**混合检索 + 重排**把问题答准并给出引用。<strong>Function Calling 是辅助</strong>，只为「查订单、查物流」这类少数实时问题补一条旁路，绝大多数问题走问答主路径。全流程在 **Langfuse** 可观测，并配一套**人工校验 golden set + 评测门禁**。它不是 demo —— 语料是真的，检索是混合的，指标是量化的。
 
 ## 📑 目录
 
@@ -39,20 +39,20 @@ helpmate 是一个能「上线」的企业知识库客服系统：以 **DJI 大�
 - 🗂️ **真实中文语料** —— 17 篇 DJI 文档 → 926 个 chunk，中文为主、夹杂大量英文专有名词（OcuSync、RTH、DJI Care…）。
 - 📄 **结构化 ingestion** —— HTML 清洗保留标题层级、PDF 表格用 PyMuPDF 抽取并转 Markdown、按章节切块并附元数据。
 - 🔍 **混合检索** —— dense（Qwen3-Embedding）+ sparse（Postgres 全文）经 **RRF 融合**，再由 **Qwen3-Reranker** 重排。中文语义靠向量，英文专有名词靠全文，各司其职。
-- 🧰 **Function Calling** —— 订单/物流类问题自动路由到 `query_order` / `query_logistics` 工具，不走知识库。
 - 📌 **带引用的回答** —— 每条知识库回答都标注来源 `[n]`，无上下文即拒答。
+- 🧰 **Function Calling（辅助）** —— 订单/物流类少数实时问题自动旁路到 `query_order` / `query_logistics` 工具，其余走知识问答主路径。
 - 🔭 **全链路 Trace** —— 每次请求在 Langfuse 记录 route / retrieve / rerank / tool / generate，含模型、token、延迟。
 - 📊 **可复现评测** —— 50 条人工校验 golden set + recall@k / MRR / nDCG / 工具路由 / 引用指标 + 阈值门禁。
 
 ## 🏗️ 架构
 
 ```text
-用户问题 ─▶ route（GLM 判断意图）
-              ├─ 订单/物流 ─▶ act：query_order / query_logistics ──┐
-              └─ 知识类   ─▶ retrieve（混合检索）─▶ rerank（Qwen3）─┤
-                                dense: pgvector 余弦(HNSW)          │
-                                sparse: tsvector 全文(GIN)          ▼
-                                    └──── RRF 融合 ───▶  generate（GLM）─▶ 带[n]引用的答案
+用户问题 ─▶ route（GLM 判意图）
+              ├─ 知识类（主）─▶ retrieve 混合检索 ─▶ rerank（Qwen3）─┐
+              │      dense pgvector(HNSW) + sparse tsvector(GIN) → RRF 融合
+              └─ 订单/物流（辅）─▶ act：query_order / query_logistics ─┤
+                                                                       ▼
+                                                   generate（GLM）─▶ 带[n]引用的答案
 ```
 
 - **摄取路径**：`loaders → chunking → pipeline → Qwen3 embed → Postgres`
