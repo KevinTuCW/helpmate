@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     glm_api_key: str = ""
     top_k: int = 4                               # final chunks handed to the LLM
 
+    # evaluation
+    eval_recall_k: int = 5                        # k for recall@k / ndcg@k
+    eval_thresholds: dict = {"recall_at_k": 0.7, "tool_routing": 0.9,
+                             "faithfulness": 0.7, "answer_relevancy": 0.7}
+
     # observability (Langfuse)
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

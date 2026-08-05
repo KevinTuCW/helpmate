@@ -10,6 +10,12 @@ def test_settings_defaults():
     assert s.rerank_model == "Qwen/Qwen3-Reranker-8B"
 
 
+def test_eval_thresholds_present():
+    s = Settings(_env_file=None)
+    assert s.eval_recall_k == 5
+    assert s.eval_thresholds["recall_at_k"] == 0.7
+
+
 def test_embed_endpoint_defaults_to_siliconflow_com():
     s = Settings(_env_file=None, siliconflow_api_key="sk-x")
     assert s.embed_base_url() == "https://api.siliconflow.com/v1"
