@@ -2,7 +2,7 @@
 
 # 🛟 helpmate
 
-**生产级企业知识库智能客服** —— 真实中文语料 · 混合检索 + 重排 · 带引用问答 · 全链路可观测 · 可复现评测（工具调用为辅）
+**生产级企业知识库智能客服** —— 真实中文语料 · 混合检索 + 重排 · 带引用问答 · 安全护栏 + 多租户 + 审计 · 多轮会话 · 全链路可观测 · 可复现评测（工具调用为辅）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#-许可证)
 [![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
@@ -42,21 +42,26 @@ helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线
 - 📌 **带引用的回答** —— 每条知识库回答都标注来源 `[n]`，无上下文即拒答。
 - 🧰 **Function Calling（辅助）** —— 订单/物流类少数实时问题自动旁路到 `query_order` / `query_logistics` 工具，其余走知识问答主路径。
 - 🔭 **全链路 Trace** —— 每次请求在 Langfuse 记录 route / retrieve / rerank / tool / generate，含模型、token、延迟。
-- 📊 **可复现评测** —— 50 条人工校验 golden set + recall@k / MRR / nDCG / 工具路由 / 引用指标 + 阈值门禁。
+- 📊 **可复现评测** —— 50 条人工校验 golden set + recall@k / MRR / nDCG / 工具路由 / 引用指标 + 阈值门禁，接 **CI 硬门禁**（pytest）。
+- 🛡️ **安全护栏** —— 输入拦注入 / 越狱 / 越权诱导，输出脱敏 + 违规内容拦截；纯规则、零额外延迟。
+- 🧾 **审计留痕** —— 每次 `/chat` 落一条不可变审计（租户 / 会话 / 决策 / 护栏结果 + 答案哈希），可回溯。
+- 🏢 **多租户隔离** —— 检索按 `tenant_id` 过滤，调用方只看得到自己有权看的文档。
+- 💬 **多轮会话** —— 会话历史改写指代（「它 / 这款」），改写只喂检索、不多花一次思考调用。
+- 🧹 **语料清洗 + 在线采样** —— 摄取阶段剥离导航/页脚 boilerplate；按比例采样线上流量回流待评。
 
 ## 🏗️ 架构
 
 ```text
-用户问题 ─▶ route（GLM 判意图）
-              ├─ 知识类（主）─▶ retrieve 混合检索 ─▶ rerank（Qwen3）─┐
+用户问题 ─▶ 输入护栏 ─▶ [多轮改写] ─▶ route（GLM 判意图）
+              ├─ 知识类（主）─▶ retrieve 混合检索（按 tenant 过滤）─▶ rerank（Qwen3）─┐
               │      dense pgvector(HNSW) + sparse tsvector(GIN) → RRF 融合
               └─ 订单/物流（辅）─▶ act：query_order / query_logistics ─┤
                                                                        ▼
-                                                   generate（GLM）─▶ 带[n]引用的答案
+                    generate（GLM）─▶ 输出护栏 ─▶ 带[n]引用的答案 ─▶ 审计留痕 + 在线采样
 ```
 
-- **摄取路径**：`loaders → chunking → pipeline → Qwen3 embed → Postgres`
-- **应答路径**：`route → (act | retrieve → rerank) → generate`，由 LangGraph 编排，Langfuse 全程埋点。
+- **摄取路径**：`loaders → clean → chunking → pipeline → Qwen3 embed → Postgres`
+- **应答路径**：`护栏(in) → [多轮改写] → route → (act | retrieve → rerank) → generate → 护栏(out) → 审计`，由 LangGraph 编排，Langfuse 全程埋点。
 
 > 详细系统设计见 [`docs/architecture.md`](docs/architecture.md)，产品需求见 [`docs/prd.md`](docs/prd.md)。
 
@@ -80,9 +85,11 @@ helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线
 **前置**：Python 3.12 · Postgres 16 + pgvector · GLM(z.ai) / SiliconFlow / Langfuse 三个 key。
 
 ```bash
-# 1. 建库并应用 schema（维度需与 EMBED_DIM 一致）
+# 1. 建库并应用 schema（含 governance/ops 表；维度需与 EMBED_DIM 一致）
 psql "$DATABASE_URL" -v dim=1024 -f db/schema.sql
 psql "$DATABASE_URL" -f db/seed.sql
+# 已有旧库、不想重灌语料？改用非破坏迁移：
+# psql "$DATABASE_URL" -f db/migrations/001_governance_ops.sql
 
 # 2. 配置密钥
 cp .env.example .env        # 填入 GLM / SiliconFlow / Langfuse key
@@ -95,6 +102,9 @@ python scripts/backfill_embeddings.py  # Qwen3 回填向量 + 建 HNSW 索引
 
 # 4. 启动服务
 uvicorn helpmate.app:app --reload
+
+# （可选）跑测试 —— CI 的硬门禁
+make test        # 等价于 pytest -q
 ```
 
 打开 <http://localhost:8000>，问一个知识库问题，或者「我的订单 A1001 到哪了？」。
@@ -162,8 +172,11 @@ helpmate/
 ├── corpus/                    # DJI 语料来源清单 + manifest（raw 抓取物 gitignore）
 │   ├── sources.tsv
 │   └── manifest.jsonl
+├── .github/workflows/ci.yml  # CI：pytest 硬门禁
+├── Makefile                  # make test / gate / ci
 ├── db/
-│   ├── schema.sql             # documents / chunks(vector+tsvector) / orders / shipments
+│   ├── schema.sql             # documents / chunks(+tenant) / orders / shipments / audit_log / session_turns / online_eval
+│   ├── migrations/            # 001_governance_ops.sql（非破坏迁移）
 │   └── seed.sql
 ├── docs/
 │   ├── prd.md                 # 产品需求
@@ -179,11 +192,17 @@ helpmate/
 │   ├── providers.py           # GLM LLM 客户端（langfuse.openai drop-in）
 │   ├── tools.py               # Function Calling 工具 + 分发
 │   ├── graph.py               # LangGraph 应答流
-│   ├── db.py                  # 检索 / 订单 / 写入
+│   ├── db.py                  # 检索(租户过滤) / 订单 / 审计 / 会话 / 采样
+│   ├── ops.py                 # 确定性在线采样门
+│   ├── security/
+│   │   └── guardrails.py      # 输入/输出护栏（注入·越狱·越权·脱敏·违规）
+│   ├── session/
+│   │   └── memory.py          # 多轮指代消解 · 历史改写检索查询
 │   ├── ingest/
 │   │   ├── loaders.py         # HTML 清洗 · PDF+表格抽取 · 表格转 MD
-│   │   ├── chunking.py        # 分节 + 元数据分块
-│   │   └── pipeline.py        # 摄取编排
+│   │   ├── clean.py           # 语料 boilerplate 清洗
+│   │   ├── chunking.py        # 分节 + 元数据分块（含 tenant_id）
+│   │   └── pipeline.py        # 摄取编排（load → clean → chunk → write）
 │   └── retrieve/
 │       ├── embed.py           # Qwen3 嵌入客户端
 │       ├── fuse.py            # RRF 融合
@@ -216,15 +235,21 @@ helpmate/
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` | Langfuse |
 | `TOP_K` / `retrieve_candidates` | 最终/候选检索条数 |
 | `eval_recall_k` / `eval_generate` / `eval_thresholds` | 评测参数 |
+| `default_tenant` / `guardrails_enabled` | 默认租户 / 是否启用输入输出护栏 |
+| `session_history_turns` / `online_sample_rate` | 多轮改写载入的历史轮数 / 在线采样比例(%) |
 
 ## 🗺️ 路线图
 
-- [x] **阶段①** 真实 DJI 中文语料 + 结构化 ingestion
+- [x] **阶段①** 真实 DJI 中文语料 + 结构化 ingestion（含 boilerplate 清洗）
 - [x] **阶段②** Qwen3 嵌入回填 + HNSW + dense/FTS/RRF + Qwen3 重排
-- [x] **阶段③** 50 条 golden set + 指标 + 报告门禁（recall@5=0.91）
+- [x] **阶段③** 50 条 golden set + 指标 + 报告门禁（recall@5=0.91）+ CI（pytest 硬门禁）
 - [x] **阶段④** Langfuse v4 全链路 trace
+- [x] **阶段⑤** 治理层：输入/输出护栏 · 审计留痕 · 多租户过滤
+- [x] **阶段⑥** 运营层：多轮会话 + 指代消解 · 在线采样回流
+- [ ] 专题：检索父子块 + 元数据过滤（拉起 manual recall）
+- [ ] 专题：延迟分级路由 + 流式（p50 38s → 面客可接受）
 - [ ] 生成类指标默认开启（需更快的 judge 模型）
-- [ ] 语料 boilerplate 清洗 · 多轮会话 · 真多模态（图像/视频）
+- [ ] 真多模态（图像 OCR / 视频转写）· 完整在线 A/B —— 阵 04
 
 ## 📄 许可证
 

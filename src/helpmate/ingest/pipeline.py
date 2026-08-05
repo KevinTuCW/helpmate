@@ -1,11 +1,12 @@
 from pathlib import Path
 from helpmate.ingest.loaders import clean_html, load_pdf
 from helpmate.ingest.chunking import split_sections, chunk_document
+from helpmate.ingest.clean import clean_corpus_text
 from helpmate import db
 
 
 def _html_to_blocks(html: str) -> list[dict]:
-    text = clean_html(html)
+    text = clean_corpus_text(clean_html(html))
     return [{"type": "text", "section": s["title"], "text": s["text"]}
             for s in split_sections(text) if s["text"]]
 
@@ -21,14 +22,15 @@ def ingest_source(*, kind: str, path_or_html: str, meta: dict,
                   size: int = 800, overlap: int = 100) -> dict:
     """Ingest one source (kind='html'|'pdf') into documents+chunks.
 
-    meta must carry: source_url, title, doc_type, product, lang.
+    meta must carry: source_url, title, doc_type, product, lang; optional tenant_id.
     Chunks are written with embedding left NULL (backfilled in phase 2).
     """
     blocks = (_html_to_blocks(path_or_html) if kind == "html"
               else _pdf_to_blocks(path_or_html))
     chunks = chunk_document(blocks, meta, size, overlap)
     doc_id = db.insert_document(meta["source_url"], meta["title"],
-                                meta["doc_type"], meta.get("product"), meta.get("lang", "zh"))
+                                meta["doc_type"], meta.get("product"), meta.get("lang", "zh"),
+                                tenant_id=meta.get("tenant_id", "public"))
     for ch in chunks:
         db.insert_chunk_row(doc_id, ch)
     return {"document_id": doc_id, "chunks": len(chunks)}

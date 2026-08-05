@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     glm_api_key: str = ""
     top_k: int = 4                               # final chunks handed to the LLM
 
+    # governance & ops
+    default_tenant: str = "public"               # tenant used when a request omits one
+    guardrails_enabled: bool = True              # input/output guardrails on /chat
+    session_history_turns: int = 6               # turns loaded for multi-turn rewrite
+    online_sample_rate: int = 10                 # % of /chat captured into online_eval (0=off)
+
     # evaluation
     eval_recall_k: int = 5                        # k for recall@k / ndcg@k
     eval_generate: bool = False                   # run generation-dependent metrics (citation/RAGAS); slow with glm-4.7

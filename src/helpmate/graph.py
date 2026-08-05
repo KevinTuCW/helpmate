@@ -13,6 +13,7 @@ PROMPT = (
 
 class ChatState(TypedDict, total=False):
     question: str
+    retrieval_query: Optional[str]   # history-enriched query for retrieval; falls back to question
     tool_call: Optional[dict]
     hits: list[dict]
     context: str
@@ -37,7 +38,7 @@ def build_graph(
         return {"context": tool_dispatch(call["name"], call["args"])}
 
     def retrieve(state: ChatState) -> ChatState:
-        hits = retriever(state["question"])
+        hits = retriever(state.get("retrieval_query") or state["question"])
         return {"hits": hits, "context": format_context(hits)}
 
     def generate(state: ChatState) -> ChatState:
@@ -58,7 +59,7 @@ def build_graph(
     g.add_edge("generate", END)
     compiled = g.compile()
 
-    def run(question: str) -> ChatState:
-        return compiled.invoke({"question": question})
+    def run(question: str, retrieval_query: Optional[str] = None) -> ChatState:
+        return compiled.invoke({"question": question, "retrieval_query": retrieval_query})
 
     return run

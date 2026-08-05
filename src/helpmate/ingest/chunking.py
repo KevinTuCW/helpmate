@@ -57,6 +57,7 @@ def chunk_document(blocks: list[dict], meta: dict, size: int = 800,
                 "product": meta.get("product"),
                 "source_url": meta.get("source_url"),
                 "lang": meta.get("lang", "zh"),
+                "tenant_id": meta.get("tenant_id", "public"),
             })
             idx += 1
     return chunks
