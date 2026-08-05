@@ -64,3 +64,15 @@ def get_shipment(order_id: str) -> Optional[dict]:
             "order_id": r[0], "carrier": r[1], "tracking_no": r[2],
             "status": r[3], "eta": str(r[4]) if r[4] else None,
         }
+
+
+def fetch_unembedded(limit: int = 64) -> list[tuple[int, str]]:
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("SELECT id, content FROM chunks WHERE embedding IS NULL ORDER BY id LIMIT %s", (limit,))
+        return [(r[0], r[1]) for r in cur.fetchall()]
+
+
+def update_embedding(chunk_id: int, embedding: list[float]) -> None:
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("UPDATE chunks SET embedding = %s WHERE id = %s",
+                    (json.dumps(embedding), chunk_id))

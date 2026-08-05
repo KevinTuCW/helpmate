@@ -29,7 +29,7 @@ CREATE TABLE chunks (
 );
 
 CREATE INDEX chunks_tsv_idx ON chunks USING gin (content_tsv);
--- HNSW vector index deferred to phase 2 (after embeddings are backfilled).
+CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE IF NOT EXISTS orders (
     order_id    TEXT PRIMARY KEY,
