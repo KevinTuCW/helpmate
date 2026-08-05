@@ -1,7 +1,7 @@
 from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
+GLM_BASE_URL = "https://api.z.ai/api/paas/v4/"  # z.ai international endpoint
 
 
 class Settings(BaseSettings):
@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://helpmate:helpmate@localhost:5432/helpmate"
     llm_provider: str = "openai"          # "openai" | "glm" (any OpenAI-compatible)
     llm_base_url: str = ""                 # explicit override; blank = provider default
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "glm-4.7"             # z.ai; thinking-on (disabling it corrupts output)
     embed_provider: str = "siliconflow"          # "siliconflow" | "local"
     siliconflow_api_key: str = ""
     siliconflow_base_url: str = "https://api.siliconflow.com/v1"
