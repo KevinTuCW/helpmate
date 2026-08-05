@@ -1,79 +1,108 @@
 # helpmate — Architecture
 
-## Overview
+A single FastAPI service with two entry points: `/ingest` (build the knowledge
+base) and `/chat` (answer a question). Answering is orchestrated by a LangGraph
+state machine that decides between a live tool call and a hybrid knowledge-base
+retrieval, then generates a cited answer. Every request is traced in Langfuse.
 
-A single FastAPI service. Two entry points: `/ingest` (build the knowledge
-base) and `/chat` (answer a question). Answering is orchestrated by a small
-LangGraph state machine that first decides whether the question needs a live
-tool call or a knowledge-base retrieval, then generates the final answer.
-
-## Components
+## System overview
 
 ```
-                     ┌──────────────────────────────────────────┐
-                     │                FastAPI app                │
-                     │                                           │
-  POST /ingest ──────┼─> chunk_text ─> embed ─> pgvector (chunks)│
-                     │                                           │
-  POST /chat  ───────┼─> LangGraph:                              │
-                     │      route ──(LLM tool-choice)──┐         │
-                     │        │ tool_call?             │ none    │
-                     │        ▼                        ▼         │
-                     │      act                     retrieve     │
-                     │   (query_order /            (pgvector      │
-                     │    query_logistics)          top-k)        │
-                     │        └────────► generate ◄────┘         │
-                     │                  (LLM answer)             │
-                     └──────────────────────────────────────────┘
-                              │                 │
-                        Postgres+pgvector   LLM / Embedder
-                     (documents, chunks,     (OpenAI default,
-                      orders, shipments)      Ollama-swappable)
+                              ┌───────────────────────── FastAPI (app.py) ─────────────────────────┐
+  POST /ingest ──────────────▶│ loaders → chunking → pipeline → (Qwen3 embed) → Postgres           │
+                              │                                                                     │
+  POST /chat  ──▶ @observe ──▶│ LangGraph (graph.py):                                               │
+   (Langfuse root trace)      │    route ──(GLM tool-choice)──┐                                     │
+                              │      │ tool_call?             │ none                                │
+                              │      ▼                        ▼                                     │
+                              │    act (dispatch_tool)     retrieve (hybrid) ──▶ rerank (Qwen3)     │
+                              │      │  query_order /          │  dense (pgvector)                   │
+                              │      │  query_logistics        │  + sparse (tsvector) ── RRF         │
+                              │      └────────► generate (GLM) ◄┘                                    │
+                              │                    │ answer with [n] citations                      │
+                              └────────────────────┼────────────────────────────────────────────────┘
+                                   Postgres 16 + pgvector          z.ai (GLM-4.7)   SiliconFlow (Qwen3)
+                               documents / chunks(vector,tsv)                        embed + rerank
+                               orders / shipments                        Langfuse (all spans)
 ```
 
-## Data flow
+## Ingestion pipeline (`ingest/`)
 
-**Ingest:** text → `chunk_text` (fixed window + overlap) → embed each chunk →
-insert into `chunks` with its `document_id` and `embedding`.
+- **loaders.py** — `clean_html` (BeautifulSoup; drops nav/footer/scripts, and
+  **preserves `<h1>–<h6>` as `#`-prefixed headings** so sections survive),
+  `table_to_markdown`, `load_pdf` (PyMuPDF: text + tables → Markdown).
+- **chunking.py** — `chunk_text` (windowed w/ overlap), `split_sections` (by
+  headings), `chunk_document` (text windowed, tables kept whole, each chunk tagged
+  with `section_title` + `doc_type` + `product` + `source_url` + `lang`).
+- **pipeline.py** — `ingest_source(kind, ...)` orchestrates load → chunk → write.
+- **Corpus** — `scripts/fetch_corpus.py` pulls a manifest of real DJI Chinese
+  pages/PDFs into `corpus/`; `scripts/ingest_corpus.py` batch-ingests them;
+  `scripts/backfill_embeddings.py` fills embeddings + builds the HNSW index.
 
-**Chat:** `route` calls the LLM with the tool schemas (`tool_choice=auto`).
-- If the model returns a tool call → `act` runs `dispatch_tool`, which formats
-  the order/shipment row into a context string.
-- Otherwise → `retrieve` runs a pgvector cosine search and formats the top-k
-  chunks into a numbered, citable context block.
-- Both feed `generate`, which builds one prompt from whichever context is
-  present and asks the LLM for the final answer.
+## Retrieval (`retrieve/`)
+
+Hybrid, so Chinese semantics and English proper nouns are both covered:
+
+- **embed.py** — `Qwen3Embedder` (SiliconFlow `Qwen/Qwen3-Embedding-8B`,
+  `dimensions=1024` to match the schema); `get_embedder()` (local hashing fallback
+  for offline tests).
+- **db.dense_search** — pgvector cosine over the HNSW index.
+- **db.fts_search** — Postgres `websearch_to_tsquery('simple', …)` over a GIN
+  `tsvector` — English proper nouns index cleanly; Chinese is left to dense.
+- **fuse.py** — `rrf_fuse` (Reciprocal Rank Fusion) merges the two rankings.
+- **rerank.py** — `Qwen/Qwen3-Reranker-8B` reorders the fused candidates to top-k.
+- **hybrid.py** — `hybrid_retrieve(query)` chains embed → dense+fts → RRF → rerank.
+- **context.py** — `format_context` renders top-k chunks as a numbered, citable block.
+
+## Generation & orchestration (`graph.py`, `providers.py`)
+
+- LangGraph nodes: `route` → (`act` | `retrieve` → rerank) → `generate`.
+- `route`/`generate` call **GLM-4.7** (`OpenAILLM`, z.ai base URL, thinking-on).
+- Prompt constrains answers to the provided context and preserves `[n]` citations;
+  refuses when context is insufficient.
+
+## Function calling (`tools.py`)
+
+Tools declared in OpenAI `tools` JSON-Schema format (`query_order`,
+`query_logistics`). `route` uses the model's native tool-choice; `dispatch_tool`
+runs the selected tool against `orders`/`shipments`. Tool results feed `generate`.
 
 ## Data model
 
-- `documents(id, source, title, created_at)`
-- `chunks(id, document_id, chunk_index, content, embedding VECTOR(1536))`
+- `documents(id, source_url, title, doc_type, product, lang, created_at)`
+- `chunks(id, document_id, chunk_index, content, section_title, doc_type, product,
+  source_url, lang, embedding VECTOR(1024), content_tsv tsvector)` —
+  HNSW index on `embedding`, GIN index on `content_tsv`.
 - `orders(order_id, customer, status, total, created_at)`
 - `shipments(order_id, carrier, tracking_no, status, eta)`
 
-## Pluggable points
+## Observability (`obs.py`)
 
-- **Embedder / LLM** — `providers.py` isolates OpenAI behind `embed` /
-  `complete` / `select_tool`; swap for Ollama or another vendor.
-- **Tools** — `tools.TOOL_SCHEMAS` + `dispatch_tool`; add a tool by declaring a
-  schema and a branch. `dispatch_tool` takes its data-access callables as
-  arguments, so it is unit-testable without a database.
+Langfuse v4. The `langfuse.openai` drop-in auto-captures GLM/Qwen3 calls as
+`generation`/`embedding` observations (model + tokens). `@observe` types the tree:
+`retrieve-context` (retriever), `rerank-candidates` (span), `tool:<name>` (tool),
+under a `chat-response` root trace with question/answer I/O, `session_id`, `tags`,
+`environment`, and a recursive PII/secret mask.
 
-## Function calling
+## Evaluation (`eval/`)
 
-Tools are declared in the OpenAI `tools` JSON-Schema format. The router relies
-on the model's native tool-choice to pick a tool and produce arguments; the
-service parses the call, dispatches it, and returns the result to the model.
-This mirrors the招/器 series' function-calling material with a runnable path.
+- `golden.jsonl` — 50 human-verified items (policy/faq/manual/order); each carries
+  `gold_chunk_ids` (the answer-bearing chunk) and, for tool questions, `expected_tool`.
+- `metrics.py` — recall@k, MRR, nDCG, tool-routing, citation precision (pure, tested).
+- `run_eval.py` — runs the golden set, writes `report.md`/`report.json` with a
+  threshold gate. Generation-dependent metrics (citation + RAGAS) are gated behind
+  `eval_generate` (off by default; glm-4.7 generation is slow).
+- `ragas_eval.py` — RAGAS faithfulness / answer-relevancy / context precision & recall
+  (judge = GLM, embeddings = Qwen3).
 
-## Ingestion note
+## Configuration (`config.py`)
 
-v1 uses a dependency-light built-in splitter (`chunk_text`) so the core is
-fully unit-testable. LlamaIndex (declared in the stack) is the intended upgrade
-path for richer loaders/splitters and a `PGVectorStore`-backed index; the
-current `db.py` talks to pgvector directly via `psycopg`.
+All providers are OpenAI-compatible and env-driven: `LLM_*` (GLM on z.ai),
+`SILICONFLOW_*` + `EMBED_*`/`RERANK_MODEL` (Qwen3), `LANGFUSE_*`, `DATABASE_URL`,
+retrieval (`TOP_K`, `retrieve_candidates`) and eval knobs (`eval_recall_k`,
+`eval_generate`, `eval_thresholds`).
 
 ## Deployment
 
-`docker-compose.yml` runs Postgres+pgvector. The app runs under uvicorn. Config
-comes from `.env` (`DATABASE_URL`, LLM/embed model + key, `TOP_K`).
+Postgres 16 + pgvector (local Homebrew or docker-compose). App runs under uvicorn.
+Python 3.12.
