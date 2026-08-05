@@ -4,6 +4,8 @@ def format_context(hits: list[dict]) -> str:
         return "(no relevant context found)"
     lines = []
     for i, h in enumerate(hits, start=1):
-        title = h.get("title") or "untitled"
-        lines.append(f"[{i}] ({title}) {h['content']}")
+        title = h.get("doc_title") or h.get("title") or "untitled"
+        section = h.get("section_title") or ""
+        head = f"{title} · {section}".strip(" ·")
+        lines.append(f"[{i}] ({head}) {h['content']}")
     return "\n".join(lines)
