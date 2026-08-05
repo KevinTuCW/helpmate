@@ -5,7 +5,15 @@ def test_settings_defaults():
     s = Settings(_env_file=None)
     assert s.top_k == 4
     assert s.embed_dim == 1024
-    assert s.llm_provider == "openai"
+    assert s.embed_provider == "siliconflow"
+    assert s.embed_model == "Qwen/Qwen3-Embedding-8B"
+    assert s.rerank_model == "Qwen/Qwen3-Reranker-8B"
+
+
+def test_embed_endpoint_defaults_to_siliconflow_com():
+    s = Settings(_env_file=None, siliconflow_api_key="sk-x")
+    assert s.embed_base_url() == "https://api.siliconflow.com/v1"
+    assert s.embed_api_key() == "sk-x"
 
 
 def test_resolved_defaults_openai():
