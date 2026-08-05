@@ -27,8 +27,12 @@ class LocalHashingEmbedder:
 
 
 def _client():
-    """An OpenAI-compatible client pointed at the configured provider (OpenAI or GLM)."""
-    from openai import OpenAI
+    """An OpenAI-compatible client pointed at the configured provider (OpenAI or GLM).
+
+    Uses the langfuse.openai drop-in so chat/tool-call completions are auto-traced
+    as `generation` observations (model, tokens, latency) under the current trace.
+    """
+    from langfuse.openai import OpenAI
     s = get_settings()
     return OpenAI(base_url=s.resolved_base_url(), api_key=s.resolved_api_key() or None)
 
@@ -54,7 +58,8 @@ class OpenAILLM:
 
     def complete(self, prompt: str) -> str:
         r = self._c.chat.completions.create(
-            model=self._model, messages=[{"role": "user", "content": prompt}]
+            model=self._model, messages=[{"role": "user", "content": prompt}],
+            name="generate-answer",
         )
         return r.choices[0].message.content or ""
 
@@ -64,6 +69,7 @@ class OpenAILLM:
             messages=[{"role": "user", "content": question}],
             tools=schemas,
             tool_choice="auto",
+            name="route-select-tool",
         )
         msg = r.choices[0].message
         if msg.tool_calls:

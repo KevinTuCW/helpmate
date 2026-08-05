@@ -1,4 +1,5 @@
 from typing import Callable, Optional
+from langfuse import observe, get_client
 
 TOOL_SCHEMAS = [
     {
@@ -37,6 +38,7 @@ def format_logistics(s: dict) -> str:
             f"status={s['status']}, eta={s.get('eta')}")
 
 
+@observe(as_type="tool", name="dispatch-tool", capture_input=False)
 def dispatch_tool(
     name: str,
     args: dict,
@@ -44,6 +46,7 @@ def dispatch_tool(
     get_order: Callable[[str], Optional[dict]],
     get_shipment: Callable[[str], Optional[dict]],
 ) -> str:
+    get_client().update_current_span(name=f"tool:{name}", input={"tool": name, "args": args})
     oid = args.get("order_id", "")
     if name == "query_order":
         o = get_order(oid)

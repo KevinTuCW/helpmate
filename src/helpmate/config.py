@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     glm_api_key: str = ""
     top_k: int = 4                               # final chunks handed to the LLM
 
+    # observability (Langfuse)
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = "https://us.cloud.langfuse.com"
+
     def resolved_base_url(self) -> Optional[str]:
         """Base URL for the OpenAI-compatible client; None uses the SDK default."""
         if self.llm_base_url:

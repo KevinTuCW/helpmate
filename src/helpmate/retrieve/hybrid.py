@@ -1,3 +1,4 @@
+from langfuse import observe
 from helpmate.config import get_settings
 from helpmate.retrieve.embed import get_embedder
 from helpmate.retrieve.fuse import rrf_fuse
@@ -5,6 +6,7 @@ from helpmate.retrieve.rerank import rerank
 from helpmate import db
 
 
+@observe(as_type="retriever", name="retrieve-context")
 def hybrid_retrieve(query: str) -> list[dict]:
     """dense + FTS → RRF fuse → Qwen3 rerank → top_k hits (with citation metadata)."""
     s = get_settings()

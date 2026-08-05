@@ -1,7 +1,9 @@
+import helpmate.obs  # noqa: F401  -- initializes Langfuse before any OpenAI client
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pathlib import Path
+from langfuse import observe, get_client, propagate_attributes
 
 from helpmate import db
 from helpmate.tools import dispatch_tool
@@ -23,6 +25,7 @@ class IngestReq(BaseModel):
 
 class ChatReq(BaseModel):
     question: str
+    session_id: str | None = None
 
 
 @app.post("/ingest")
@@ -42,15 +45,23 @@ def ingest(req: IngestReq):
 
 
 @app.post("/chat")
+@observe(name="chat-response", capture_input=False)
 def chat(req: ChatReq):
-    run = build_graph(
-        retriever=lambda q: hybrid_retrieve(q),
-        tool_dispatch=lambda name, args: dispatch_tool(
-            name, args, get_order=db.get_order, get_shipment=db.get_shipment
-        ),
-        llm=OpenAILLM(),
-    )
-    state = run(req.question)
+    attrs = {"tags": ["chat"]}
+    if req.session_id:
+        attrs["session_id"] = req.session_id
+    with propagate_attributes(**attrs):
+        get_client().set_current_trace_io(input=req.question)
+        run = build_graph(
+            retriever=lambda q: hybrid_retrieve(q),
+            tool_dispatch=lambda name, args: dispatch_tool(
+                name, args, get_order=db.get_order, get_shipment=db.get_shipment
+            ),
+            llm=OpenAILLM(),
+        )
+        state = run(req.question)
+        get_client().set_current_trace_io(input=req.question, output=state["answer"])
+        get_client().update_current_span(input=req.question, output=state["answer"])
     return {"answer": state["answer"], "hits": state.get("hits", []),
             "tool_call": state.get("tool_call")}
 
