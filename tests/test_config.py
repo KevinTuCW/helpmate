@@ -10,10 +10,13 @@ def test_settings_defaults():
     assert s.rerank_model == "Qwen/Qwen3-Reranker-8B"
 
 
-def test_eval_thresholds_present():
+def test_eval_thresholds_sit_close_to_the_measured_baseline():
+    # A threshold 20 points below the baseline is decoration, not a gate.
     s = Settings(_env_file=None)
     assert s.eval_recall_k == 5
-    assert s.eval_thresholds["recall_at_k"] == 0.7
+    assert s.eval_thresholds["recall_at_k"] == 0.88
+    assert s.eval_thresholds["tool_routing"] == 0.95
+    assert s.eval_thresholds["tenant_isolation"] == 1.0
 
 
 def test_embed_endpoint_defaults_to_siliconflow_com():

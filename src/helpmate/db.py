@@ -1,12 +1,41 @@
 import hashlib
 import json
 import psycopg
+from contextlib import contextmanager
 from typing import Optional
 from helpmate.config import get_settings
 
+_POOL = None
 
+
+def _pool():
+    """Lazily build a process-wide connection pool.
+
+    A single `/chat` touches the DB 5–7 times (retrieve, order, audit, turns,
+    sampling); opening a fresh TCP+TLS connection each time is the first thing
+    that falls over under concurrency. `psycopg_pool` is optional — without it
+    we fall back to per-call connections so the repo still runs.
+    """
+    global _POOL
+    if _POOL is None:
+        try:
+            from psycopg_pool import ConnectionPool
+        except ImportError:      # pragma: no cover - optional dependency
+            return None
+        _POOL = ConnectionPool(get_settings().database_url, min_size=1,
+                               max_size=10, open=True)
+    return _POOL
+
+
+@contextmanager
 def _conn():
-    return psycopg.connect(get_settings().database_url)
+    pool = _pool()
+    if pool is None:             # pragma: no cover - fallback path
+        with psycopg.connect(get_settings().database_url) as conn:
+            yield conn
+        return
+    with pool.connection() as conn:
+        yield conn
 
 
 def insert_document(source_url: str, title: str, doc_type: str,
@@ -33,22 +62,22 @@ def insert_chunk_row(document_id: int, ch: dict) -> None:
         )
 
 
-def search(embedding: list[float], top_k: int) -> list[dict]:
+def get_order(order_id: str, *, tenant_id: str,
+              customer_id: Optional[str]) -> Optional[dict]:
+    """Look up an order **the caller owns**.
+
+    Ownership is enforced in SQL, not in the prompt: a caller with no bound
+    customer gets nothing, and a bound caller only ever sees their own rows.
+    A foreign order is indistinguishable from a missing one (both return None)
+    so the tool cannot be used to enumerate order ids.
+    """
+    if not customer_id:
+        return None
     with _conn() as c, c.cursor() as cur:
         cur.execute(
-            "SELECT ch.content, d.title FROM chunks ch "
-            "JOIN documents d ON d.id = ch.document_id "
-            "ORDER BY ch.embedding <=> %s::vector LIMIT %s",
-            (json.dumps(embedding), top_k),
-        )
-        return [{"content": r[0], "title": r[1]} for r in cur.fetchall()]
-
-
-def get_order(order_id: str) -> Optional[dict]:
-    with _conn() as c, c.cursor() as cur:
-        cur.execute(
-            "SELECT order_id, customer, status, total FROM orders WHERE order_id = %s",
-            (order_id,),
+            "SELECT order_id, customer, status, total FROM orders "
+            "WHERE order_id = %s AND tenant_id = %s AND customer_id = %s",
+            (order_id, tenant_id, customer_id),
         )
         r = cur.fetchone()
         return None if r is None else {
@@ -56,11 +85,17 @@ def get_order(order_id: str) -> Optional[dict]:
         }
 
 
-def get_shipment(order_id: str) -> Optional[dict]:
+def get_shipment(order_id: str, *, tenant_id: str,
+                 customer_id: Optional[str]) -> Optional[dict]:
+    """Shipment for an order the caller owns (ownership lives on `orders`)."""
+    if not customer_id:
+        return None
     with _conn() as c, c.cursor() as cur:
         cur.execute(
-            "SELECT order_id, carrier, tracking_no, status, eta FROM shipments WHERE order_id = %s",
-            (order_id,),
+            "SELECT s.order_id, s.carrier, s.tracking_no, s.status, s.eta "
+            "FROM shipments s JOIN orders o ON o.order_id = s.order_id "
+            "WHERE s.order_id = %s AND o.tenant_id = %s AND o.customer_id = %s",
+            (order_id, tenant_id, customer_id),
         )
         r = cur.fetchone()
         return None if r is None else {
@@ -69,9 +104,21 @@ def get_shipment(order_id: str) -> Optional[dict]:
         }
 
 
-def fetch_unembedded(limit: int = 64) -> list[tuple[int, str]]:
+def fetch_unembedded(limit: int = 64,
+                     document_id: Optional[int] = None) -> list[tuple[int, str]]:
+    """Chunks still missing an embedding, optionally scoped to one document.
+
+    `/ingest` scopes to the document it just wrote — an ingest request must not
+    drag every other tenant's pending chunks through the embedding API.
+    """
+    doc_clause = "AND document_id = %s " if document_id is not None else ""
+    params = [] + ([document_id] if document_id is not None else []) + [limit]
     with _conn() as c, c.cursor() as cur:
-        cur.execute("SELECT id, content FROM chunks WHERE embedding IS NULL ORDER BY id LIMIT %s", (limit,))
+        cur.execute(
+            "SELECT id, content FROM chunks WHERE embedding IS NULL " + doc_clause +
+            "ORDER BY id LIMIT %s",
+            tuple(params),
+        )
         return [(r[0], r[1]) for r in cur.fetchall()]
 
 
@@ -151,6 +198,44 @@ def recent_turns(session_id: str, limit: int = 6) -> list[dict]:
         )
         rows = [{"role": r[0], "content": r[1]} for r in cur.fetchall()]
     return list(reversed(rows))
+
+
+# --- eval: stable golden-set anchors -----------------------------------------
+# `chunks.id` is a serial that changes on every re-ingest, so a golden set keyed
+# on it dies the moment chunking changes. Anchors key on content instead.
+
+def anchors_for_chunk_ids(chunk_ids: list[int]) -> list[dict]:
+    """(source_url, section_title, chunk_index) for each chunk id, in order."""
+    if not chunk_ids:
+        return []
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT id, source_url, section_title, chunk_index FROM chunks "
+            "WHERE id = ANY(%s)",
+            (list(chunk_ids),),
+        )
+        by_id = {r[0]: {"source_url": r[1], "section_title": r[2],
+                        "chunk_index": r[3]} for r in cur.fetchall()}
+    return [by_id[i] for i in chunk_ids if i in by_id]
+
+
+def chunk_ids_for_anchor(anchor: dict, tenant_id: Optional[str] = None) -> list[int]:
+    """Resolve one golden anchor back to current chunk ids."""
+    clauses = ["source_url = %s"]
+    params: list = [anchor.get("source_url")]
+    if anchor.get("section_title") is not None:
+        clauses.append("section_title IS NOT DISTINCT FROM %s")
+        params.append(anchor["section_title"])
+    if anchor.get("chunk_index") is not None:
+        clauses.append("chunk_index = %s")
+        params.append(anchor["chunk_index"])
+    if tenant_id:
+        clauses.append("tenant_id = %s")
+        params.append(tenant_id)
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("SELECT id FROM chunks WHERE " + " AND ".join(clauses) +
+                    " ORDER BY id", tuple(params))
+        return [r[0] for r in cur.fetchall()]
 
 
 # --- ops: online sampling ----------------------------------------------------

@@ -42,10 +42,10 @@ helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线
 - 📌 **带引用的回答** —— 每条知识库回答都标注来源 `[n]`，无上下文即拒答。
 - 🧰 **Function Calling（辅助）** —— 订单/物流类少数实时问题自动旁路到 `query_order` / `query_logistics` 工具，其余走知识问答主路径。
 - 🔭 **全链路 Trace** —— 每次请求在 Langfuse 记录 route / retrieve / rerank / tool / generate，含模型、token、延迟。
-- 📊 **可复现评测** —— 50 条人工校验 golden set + recall@k / MRR / nDCG / 工具路由 / 引用指标 + 阈值门禁，接 **CI 硬门禁**（pytest）。
+- 📊 **可复现评测** —— 50 条人工校验 golden set（+3 条跨租户负例）+ recall@k / MRR / nDCG / 工具路由 / 租户隔离 / 引用指标 + 贴基线阈值；golden 支持内容锚点，重灌库不失效。CI 硬门禁是单测（pytest），指标门禁跑本地/夜跑。
 - 🛡️ **安全护栏** —— 输入拦注入 / 越狱 / 越权诱导，输出脱敏 + 违规内容拦截；纯规则、零额外延迟。
-- 🧾 **审计留痕** —— 每次 `/chat` 落一条不可变审计（租户 / 会话 / 决策 / 护栏结果 + 答案哈希），可回溯。
-- 🏢 **多租户隔离** —— 检索按 `tenant_id` 过滤，调用方只看得到自己有权看的文档。
+- 🧾 **审计留痕** —— 每次 `/chat` 落一条不可变审计（租户 / 会话 / 决策 / 护栏结果 + 答案哈希）；问题侧先脱敏再入库，可回溯而不留明文 PII。
+- 🏢 **身份与授权** —— 调用方身份来自 API Key（`X-API-Key`）而非请求体：检索按 `tenant_id` 过滤，**订单/物流按 `customer_id` 做行级归属校验**，报一个陌生单号只会得到「未找到」。未配 `API_KEYS` 时为本地 dev 身份，克隆即跑。
 - 💬 **多轮会话** —— 会话历史改写指代（「它 / 这款」），改写只喂检索、不多花一次思考调用。
 - 🧹 **语料清洗 + 在线采样** —— 摄取阶段剥离导航/页脚 boilerplate；按比例采样线上流量回流待评。
 
@@ -90,6 +90,7 @@ psql "$DATABASE_URL" -v dim=1024 -f db/schema.sql
 psql "$DATABASE_URL" -f db/seed.sql
 # 已有旧库、不想重灌语料？改用非破坏迁移：
 # psql "$DATABASE_URL" -f db/migrations/001_governance_ops.sql
+# psql "$DATABASE_URL" -f db/migrations/002_order_ownership.sql   # 订单归属列
 
 # 2. 配置密钥
 cp .env.example .env        # 填入 GLM / SiliconFlow / Langfuse key
@@ -112,8 +113,13 @@ make test        # 等价于 pytest -q
 ## 💬 使用示例
 
 ```bash
+# dev 模式（未配 API_KEYS）：身份 = DEFAULT_TENANT / DEFAULT_CUSTOMER
 curl -X POST localhost:8000/chat -H 'Content-Type: application/json' \
   -d '{"question":"DJI Care 随心换进水了能保修吗？"}'
+
+# 配了 API_KEYS 之后，身份走凭证（请求体不再接受 tenant_id）
+curl -X POST localhost:8000/chat -H 'X-API-Key: sk-dji-alice' \
+  -H 'Content-Type: application/json' -d '{"question":"我的订单 A1001 到哪了？"}'
 ```
 
 ```jsonc
@@ -124,9 +130,13 @@ curl -X POST localhost:8000/chat -H 'Content-Type: application/json' \
 // 规格类 → 命中中文 PDF 手册的规格表
 { "answer": "DJI Mini 4 Pro 的最大起飞重量为 ＜249 g [1][2]。" }
 
-// 订单类 → Function Calling
+// 订单类 → Function Calling（仅限调用方自己的订单）
 { "answer": "订单 A1001 目前运输中，预计送达 2026-08-06 [1]。",
   "tool_call": { "name": "query_logistics", "args": { "order_id": "A1001" } } }
+
+// 别人的订单 → 归属校验在 SQL 里拦下，与「不存在」返回同一句，无法枚举
+{ "answer": "没有查到订单 A1002 的信息。",
+  "tool_call": { "name": "query_order", "args": { "order_id": "A1002" } } }
 ```
 
 ## 📊 评测
@@ -137,15 +147,19 @@ golden set 驱动的可复现评测闭环，一条命令出报告与门禁：
 python eval/run_eval.py     # → eval/report.md
 ```
 
-**最新基线**（50 条，`glm-4.7`，k=5）：
+**最新基线**（53 条 = 50 条问答 + 3 条跨租户负例，`glm-4.7`，k=5）：
 
 | 指标 | 值 | 阈值 | 结果 |
 | --- | --- | --- | --- |
-| recall@5 | **0.91** | 0.70 | ✅ |
-| tool_routing | **1.00** | 0.90 | ✅ |
+| recall@5 | **0.91** | 0.88 | ✅ |
+| tool_routing | **1.00** | 0.95 | ✅ |
+| tenant_isolation | 待重跑 | 1.00 | — |
 | MRR | 0.79 | — | — |
 | nDCG@5 | 0.82 | — | — |
-| **门禁** | | | **PASS ✅** |
+
+> 阈值贴着基线留 ~3 个点余量：0.70 的旧阈值退化 20 个点仍会 PASS，那不是门禁。
+> `tenant_isolation` 是新增的跨租户负例（同一问题以外部租户身份检索必须零命中）。
+> 单测（`make test`）是 CI 硬门禁；`make gate` 这套指标需要真库 + 真 key，跑在本地/夜跑，不在 CI 内。
 
 > 生成类指标（引用正确率 + RAGAS faithfulness/answer_relevancy）由 `eval_generate=True` 开启（judge=GLM、embeddings=Qwen3）。golden set 见 [`eval/golden.jsonl`](eval/golden.jsonl)。
 
@@ -176,7 +190,7 @@ helpmate/
 ├── Makefile                  # make test / gate / ci
 ├── db/
 │   ├── schema.sql             # documents / chunks(+tenant) / orders / shipments / audit_log / session_turns / online_eval
-│   ├── migrations/            # 001_governance_ops.sql（非破坏迁移）
+│   ├── migrations/            # 001_governance_ops · 002_order_ownership（非破坏迁移）
 │   └── seed.sql
 ├── docs/
 │   ├── prd.md                 # 产品需求
@@ -192,7 +206,8 @@ helpmate/
 │   ├── providers.py           # GLM LLM 客户端（langfuse.openai drop-in）
 │   ├── tools.py               # Function Calling 工具 + 分发
 │   ├── graph.py               # LangGraph 应答流
-│   ├── db.py                  # 检索(租户过滤) / 订单 / 审计 / 会话 / 采样
+│   ├── auth.py                # API Key → Principal(tenant, customer)
+│   ├── db.py                  # 检索(租户过滤) / 订单(归属校验) / 审计 / 会话 / 采样
 │   ├── ops.py                 # 确定性在线采样门
 │   ├── security/
 │   │   └── guardrails.py      # 输入/输出护栏（注入·越狱·越权·脱敏·违规）
@@ -210,7 +225,8 @@ helpmate/
 │       ├── hybrid.py          # dense+FTS→RRF→rerank 编排
 │       └── context.py         # 带引用的上下文拼装
 ├── eval/
-│   ├── golden.jsonl           # 50 条人工校验评测集
+│   ├── golden.jsonl           # 50 条人工校验评测集 + 3 条跨租户负例
+│   ├── relink_golden.py       # chunk_id → 内容锚点(重灌库不失效)
 │   ├── metrics.py             # recall@k / MRR / nDCG / 工具 / 引用（TDD）
 │   ├── run_eval.py            # 评测 runner + 报告 + 门禁
 │   ├── ragas_eval.py          # RAGAS 生成质量指标
@@ -235,7 +251,11 @@ helpmate/
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` | Langfuse |
 | `TOP_K` / `retrieve_candidates` | 最终/候选检索条数 |
 | `eval_recall_k` / `eval_generate` / `eval_thresholds` | 评测参数 |
-| `default_tenant` / `guardrails_enabled` | 默认租户 / 是否启用输入输出护栏 |
+| `API_KEYS` | JSON：API Key → `"tenant"` 或 `"tenant:customer"`；留空 = dev 模式 |
+| `default_tenant` / `default_customer` | dev 模式下的租户 / 订单归属身份 |
+| `guardrails_enabled` | 是否启用输入输出护栏 |
+| `llm_timeout_s` / `llm_max_retries` | LLM 单次超时 / 重试次数 |
+| `ingest_max_chunks` | 单次 `/ingest` 回填向量的 chunk 上限 |
 | `session_history_turns` / `online_sample_rate` | 多轮改写载入的历史轮数 / 在线采样比例(%) |
 
 ## 🗺️ 路线图
@@ -244,7 +264,7 @@ helpmate/
 - [x] **阶段②** Qwen3 嵌入回填 + HNSW + dense/FTS/RRF + Qwen3 重排
 - [x] **阶段③** 50 条 golden set + 指标 + 报告门禁（recall@5=0.91）+ CI（pytest 硬门禁）
 - [x] **阶段④** Langfuse v4 全链路 trace
-- [x] **阶段⑤** 治理层：输入/输出护栏 · 审计留痕 · 多租户过滤
+- [x] **阶段⑤** 治理层：输入/输出护栏 · 审计留痕(问题侧脱敏) · 多租户过滤 · API Key 身份 + 订单行级归属校验
 - [x] **阶段⑥** 运营层：多轮会话 + 指代消解 · 在线采样回流
 - [ ] 专题：检索父子块 + 元数据过滤（拉起 manual recall）
 - [ ] 专题：延迟分级路由 + 流式（p50 38s → 面客可接受）

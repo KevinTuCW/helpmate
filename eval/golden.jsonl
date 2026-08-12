@@ -48,3 +48,6 @@
 {"id": "order-003", "category": "order", "question": "帮我查一下订单 A1002 的状态", "expected_points": [], "gold_chunk_ids": [], "expected_tool": "query_order", "notes": ""}
 {"id": "order-004", "category": "order", "question": "A1001 这个订单发货了吗？", "expected_points": [], "gold_chunk_ids": [], "expected_tool": "query_logistics", "notes": ""}
 {"id": "order-005", "category": "order", "question": "订单 A1002 多少钱？", "expected_points": [], "gold_chunk_ids": [], "expected_tool": "query_order", "notes": ""}
+{"id": "isolation-001", "category": "isolation", "question": "DJI 无人机哪些情况能免费保修，哪些不保修？", "expected_points": [], "gold_chunk_ids": [], "expected_tool": null, "foreign_tenant": "acme-competitor", "notes": "cross-tenant negative: retrieval as a foreign tenant must return zero hits"}
+{"id": "isolation-002", "category": "isolation", "question": "在 DJI 官方商城买的航拍无人机，签收后几天内能申请退货？要满足什么条件？", "expected_points": [], "gold_chunk_ids": [], "expected_tool": null, "foreign_tenant": "acme-competitor", "notes": "cross-tenant negative: retrieval as a foreign tenant must return zero hits"}
+{"id": "isolation-003", "category": "isolation", "question": "无人机什么条件下可以申请换货？换货期限多久？", "expected_points": [], "gold_chunk_ids": [], "expected_tool": null, "foreign_tenant": "acme-competitor", "notes": "cross-tenant negative: retrieval as a foreign tenant must return zero hits"}

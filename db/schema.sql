@@ -69,13 +69,19 @@ CREATE TABLE IF NOT EXISTS online_eval (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Orders carry the same ownership columns as the corpus: retrieval filters by
+-- tenant, order lookups additionally filter by customer, so the Function-Calling
+-- side cannot become a horizontal-privilege hole.
 CREATE TABLE IF NOT EXISTS orders (
     order_id    TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL DEFAULT 'public',   -- tenant boundary
+    customer_id TEXT NOT NULL,                    -- ownership boundary
     customer    TEXT NOT NULL,
     status      TEXT NOT NULL,
     total       NUMERIC(10,2) NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS orders_owner_idx ON orders (tenant_id, customer_id);
 CREATE TABLE IF NOT EXISTS shipments (
     order_id    TEXT PRIMARY KEY REFERENCES orders(order_id) ON DELETE CASCADE,
     carrier     TEXT NOT NULL,

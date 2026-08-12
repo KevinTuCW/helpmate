@@ -42,3 +42,18 @@ def test_output_blocks_disallowed_content():
 def test_clean_answer_passes_untouched():
     r = check_output("Mini 3 Pro 最大续航约 34 分钟 [1]。")
     assert r.allowed and not r.reasons and r.text.endswith("[1]。")
+
+
+def test_redact_pii_masks_identifiers_before_persistence():
+    from helpmate.security import redact_pii
+    out = redact_pii("我的手机 13800138000，邮箱 zhang@example.com，卡号 6222021234567890")
+    assert "13800138000" not in out
+    assert "zhang@example.com" not in out
+    assert "6222021234567890" not in out
+    assert "***" in out
+
+
+def test_redact_pii_also_masks_secrets_and_leaves_plain_text_alone():
+    from helpmate.security import redact_pii
+    assert "sk-abcd1234567890ef" not in redact_pii("key sk-abcd1234567890ef")
+    assert redact_pii("DJI Care 随心换怎么保修？") == "DJI Care 随心换怎么保修？"

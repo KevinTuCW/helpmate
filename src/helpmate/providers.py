@@ -34,7 +34,10 @@ def _client():
     """
     from langfuse.openai import OpenAI
     s = get_settings()
-    return OpenAI(base_url=s.resolved_base_url(), api_key=s.resolved_api_key() or None)
+    # Timeout + retries are not optional on a customer-facing path: without them
+    # one hung upstream request hangs the whole /chat call.
+    return OpenAI(base_url=s.resolved_base_url(), api_key=s.resolved_api_key() or None,
+                  timeout=s.llm_timeout_s, max_retries=s.llm_max_retries)
 
 
 class OpenAIEmbedder:

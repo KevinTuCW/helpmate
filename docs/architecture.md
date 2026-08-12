@@ -91,9 +91,21 @@ Rules-based, pure, and unit-tested — deliberately no LLM call, so zero latency
   disallowed content and redacts leaked secrets (bearer tokens, API keys, DSNs).
 - **Audit trail** — `db.write_audit` appends one immutable `audit_log` row per
   `/chat` (tenant, session, question, decision, tool, guard verdicts, and an answer
-  *hash* rather than the answer text).
+  *hash* rather than the answer text). The question goes through `redact_pii`
+  first: the trail stays traceable without storing plaintext phone numbers,
+  emails or card numbers.
+- **Identity (`auth.py`)** — a request's tenant comes from its credential
+  (`X-API-Key` → `Principal`), never from the request body. `API_KEYS` maps a key
+  to `"tenant"` or `"tenant:customer"`; with no keys configured the service runs in
+  dev mode under `default_tenant` / `default_customer` so the demo still runs.
 - **Multi-tenant filtering** — `db.dense_search` / `db.fts_search` take a `tenant_id`
   and scope both retrieval legs, so a caller only sees documents it's entitled to.
+- **Row-level order authorization** — `db.get_order` / `db.get_shipment` filter on
+  the principal's `(tenant_id, customer_id)`. A caller with no bound customer is
+  denied before any query is issued, and someone else's order is indistinguishable
+  from a nonexistent one, so the tool cannot be used to enumerate order ids. The
+  guardrail regexes catch a user *asking* for 别人的订单; only this catches a bare
+  order id, which is the actual attack.
 
 ## Session memory (`session/`)
 

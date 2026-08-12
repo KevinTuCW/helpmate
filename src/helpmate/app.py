@@ -1,11 +1,12 @@
 import helpmate.obs  # noqa: F401  -- initializes Langfuse before any OpenAI client
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pathlib import Path
 from langfuse import observe, get_client, propagate_attributes
 
 from helpmate import db
+from helpmate.auth import Principal, require_principal
 from helpmate.config import get_settings
 from helpmate.tools import dispatch_tool
 from helpmate.providers import OpenAILLM
@@ -13,7 +14,8 @@ from helpmate.retrieve.embed import get_embedder
 from helpmate.retrieve.hybrid import hybrid_retrieve
 from helpmate.ingest.pipeline import ingest_source
 from helpmate.graph import build_graph
-from helpmate.security import check_input, check_output, REFUSAL_INPUT, REFUSAL_OUTPUT
+from helpmate.security import (check_input, check_output, redact_pii,
+                               REFUSAL_INPUT, REFUSAL_OUTPUT)
 from helpmate.session import rewrite_query
 from helpmate.ops import should_sample
 
@@ -30,30 +32,36 @@ class IngestReq(BaseModel):
 class ChatReq(BaseModel):
     question: str
     session_id: str | None = None
-    tenant_id: str | None = None
+    # No tenant_id here on purpose: identity comes from the credential, never
+    # from the request body. A caller must not be able to name its own tenant.
 
 
 @app.post("/ingest")
-def ingest(req: IngestReq):
+def ingest(req: IngestReq, principal: Principal = Depends(require_principal)):
+    """Ingest one document for the caller's tenant and embed *its* chunks only."""
+    s = get_settings()
     r = ingest_source(kind="html", path_or_html=req.text,
                       meta={"source_url": req.source, "title": req.title,
-                            "doc_type": "faq", "product": None, "lang": "zh"})
+                            "doc_type": "faq", "product": None, "lang": "zh",
+                            "tenant_id": principal.tenant_id})
     embedder = get_embedder()
-    while True:
-        rows = db.fetch_unembedded(32)
+    embedded = 0
+    while embedded < s.ingest_max_chunks:
+        rows = db.fetch_unembedded(32, document_id=r["document_id"])
         if not rows:
             break
         vecs = embedder.embed_batch([c for _, c in rows])
         for (cid, _), v in zip(rows, vecs):
             db.update_embedding(cid, v)
-    return r
+        embedded += len(rows)
+    return {**r, "embedded": embedded}
 
 
 @app.post("/chat")
 @observe(name="chat-response", capture_input=False)
-def chat(req: ChatReq):
+def chat(req: ChatReq, principal: Principal = Depends(require_principal)):
     s = get_settings()
-    tenant = req.tenant_id or s.default_tenant
+    tenant = principal.tenant_id
     attrs = {"tags": ["chat"]}
     if req.session_id:
         attrs["session_id"] = req.session_id
@@ -65,7 +73,7 @@ def chat(req: ChatReq):
             gin = check_input(req.question)
             if gin.blocked:
                 db.write_audit(tenant_id=tenant, session_id=req.session_id,
-                               question=req.question, decision="blocked_input",
+                               question=redact_pii(req.question), decision="blocked_input",
                                tool_call=None, guard=gin.reasons, answer="")
                 get_client().set_current_trace_io(input=req.question, output=REFUSAL_INPUT)
                 return {"answer": REFUSAL_INPUT, "hits": [], "tool_call": None,
@@ -78,8 +86,16 @@ def chat(req: ChatReq):
 
         run = build_graph(
             retriever=lambda q: hybrid_retrieve(q, tenant_id=tenant),
+            # Order lookups are bound to the authenticated principal, so a
+            # stranger's order_id resolves to "not found" instead of leaking.
             tool_dispatch=lambda name, args: dispatch_tool(
-                name, args, get_order=db.get_order, get_shipment=db.get_shipment
+                name, args,
+                get_order=lambda oid: db.get_order(
+                    oid, tenant_id=principal.tenant_id,
+                    customer_id=principal.customer_id),
+                get_shipment=lambda oid: db.get_shipment(
+                    oid, tenant_id=principal.tenant_id,
+                    customer_id=principal.customer_id),
             ),
             llm=OpenAILLM(),
         )
@@ -99,7 +115,8 @@ def chat(req: ChatReq):
 
         # governance: audit every turn; multi-turn: persist the exchange
         tool_name = (state.get("tool_call") or {}).get("name")
-        db.write_audit(tenant_id=tenant, session_id=req.session_id, question=req.question,
+        db.write_audit(tenant_id=tenant, session_id=req.session_id,
+                       question=redact_pii(req.question),
                        decision=decision, tool_call=tool_name, guard=guard_reasons,
                        answer=answer)
         if req.session_id:
@@ -110,7 +127,8 @@ def chat(req: ChatReq):
         hit_ids = [h.get("chunk_id") for h in state.get("hits", [])]
         if should_sample(req.session_id or req.question, s.online_sample_rate):
             db.capture_sample(tenant_id=tenant, session_id=req.session_id,
-                              question=req.question, answer=answer, hit_ids=hit_ids)
+                              question=redact_pii(req.question),
+                              answer=answer, hit_ids=hit_ids)
 
         get_client().set_current_trace_io(input=req.question, output=answer)
         get_client().update_current_span(input=req.question, output=answer)

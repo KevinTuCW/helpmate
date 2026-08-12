@@ -6,9 +6,11 @@ def test_tool_schemas_expose_two_functions():
     assert names == {"query_order", "query_logistics"}
 
 
-def test_format_order():
+def test_format_order_does_not_echo_customer_name():
     o = {"order_id": "A1001", "customer": "Alice", "status": "shipped", "total": 129.0}
-    assert format_order(o) == "Order A1001 (Alice): status=shipped, total=129.0"
+    out = format_order(o)
+    assert out == "Order A1001: status=shipped, total=129.0"
+    assert "Alice" not in out
 
 
 def test_format_logistics():
@@ -25,7 +27,7 @@ def test_dispatch_query_order_found_and_missing():
                                "status": "shipped", "total": 129.0},
         get_shipment=lambda oid: None,
     )
-    assert "Order A1001 (Alice)" in got
+    assert "Order A1001" in got
     missing = dispatch_tool(
         "query_order", {"order_id": "X"},
         get_order=lambda oid: None, get_shipment=lambda oid: None,

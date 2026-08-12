@@ -30,7 +30,9 @@ TOOL_SCHEMAS = [
 
 
 def format_order(o: dict) -> str:
-    return f"Order {o['order_id']} ({o['customer']}): status={o['status']}, total={o['total']}"
+    # The customer name is deliberately not echoed back: the caller already
+    # proved ownership to get here, so repeating it only adds a leak surface.
+    return f"Order {o['order_id']}: status={o['status']}, total={o['total']}"
 
 
 def format_logistics(s: dict) -> str:

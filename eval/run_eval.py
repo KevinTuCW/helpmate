@@ -22,9 +22,27 @@ def _load_golden():
     return [json.loads(l) for l in (ROOT / "eval" / "golden.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
+def _gold_ids(item: dict, tenant_id: str) -> list[int]:
+    """Ground-truth chunk ids for one golden item.
+
+    Prefers `gold_anchors` (source_url + section_title + chunk_index), which
+    survive a re-ingest, and falls back to the recorded `gold_chunk_ids` for
+    items not yet relinked (see eval/relink_golden.py). Keying a golden set on
+    a serial primary key means any chunking change silently invalidates it.
+    """
+    anchors = item.get("gold_anchors")
+    if not anchors:
+        return item.get("gold_chunk_ids", [])
+    resolved: list[int] = []
+    for a in anchors:
+        resolved.extend(db.chunk_ids_for_anchor(a, tenant_id))
+    return resolved or item.get("gold_chunk_ids", [])
+
+
 def evaluate() -> dict:
     s = get_settings()
     k = s.eval_recall_k
+    tenant = s.default_tenant
     llm = OpenAILLM()
     rows = []
     for item in _load_golden():
@@ -33,10 +51,17 @@ def evaluate() -> dict:
         if item["category"] == "order":
             call = llm.select_tool(q, TOOL_SCHEMAS)
             rec["tool_correct"] = tool_correct(call["name"] if call else None, item["expected_tool"])
+        elif item["category"] == "isolation":
+            # Negative case: the same question asked as a foreign tenant must
+            # retrieve nothing. Tenant filtering is a v1 claim, so it is gated.
+            foreign = item.get("foreign_tenant", "__no_such_tenant__")
+            rec["isolation_ok"] = 0.0 if hybrid_retrieve(q, tenant_id=foreign) else 1.0
         else:
-            hits = hybrid_retrieve(q)
+            # Retrieve as the tenant under test: the eval must exercise the same
+            # tenant-filtered path production uses, not an unfiltered one.
+            hits = hybrid_retrieve(q, tenant_id=tenant)
             ret_ids = [h["chunk_id"] for h in hits]
-            gold = item.get("gold_chunk_ids", [])
+            gold = _gold_ids(item, tenant)
             rec["recall_at_k"] = recall_at_k(ret_ids, gold, k)
             rec["mrr"] = mrr(ret_ids, gold)
             rec["ndcg_at_k"] = ndcg_at_k(ret_ids, gold, k)
@@ -47,8 +72,12 @@ def evaluate() -> dict:
                                     "contexts": [h["content"] for h in hits],
                                     "ground_truth": " ".join(item.get("expected_points", []))}
         rows.append(rec)
-        tag = ("tool " + str(rec.get("tool_correct")) if item["category"] == "order"
-               else "recall@%d=%.2f" % (k, rec.get("recall_at_k", 0)))
+        if item["category"] == "order":
+            tag = "tool " + str(rec.get("tool_correct"))
+        elif item["category"] == "isolation":
+            tag = "isolation " + str(rec.get("isolation_ok"))
+        else:
+            tag = "recall@%d=%.2f" % (k, rec.get("recall_at_k", 0))
         print(f"{rec['id']}: {tag}")
 
     def agg(metric):
@@ -58,7 +87,8 @@ def evaluate() -> dict:
     summary = {"n": len(rows),
                "recall_at_k": agg("recall_at_k"), "mrr": agg("mrr"),
                "ndcg_at_k": agg("ndcg_at_k"), "citation_precision": agg("citation_precision"),
-               "tool_routing": agg("tool_correct")}
+               "tool_routing": agg("tool_correct"),
+               "tenant_isolation": agg("isolation_ok")}
     eval_rows = [r.pop("_eval_row") for r in rows if "_eval_row" in r]
     try:
         from eval.ragas_eval import run_ragas
@@ -80,6 +110,7 @@ def write_markdown(report: dict) -> list[str]:
     fails = []
     ragas = summ.get("ragas") or {}
     checks = {"recall_at_k": summ["recall_at_k"], "tool_routing": summ["tool_routing"],
+              "tenant_isolation": summ.get("tenant_isolation"),
               "faithfulness": ragas.get("faithfulness"),
               "answer_relevancy": ragas.get("answer_relevancy")}
     for name, val in checks.items():

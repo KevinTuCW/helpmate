@@ -49,6 +49,14 @@ _SECRET = [
     re.compile(r"postgres(ql)?://[^\s]+"),
 ]
 
+# --- PII that must not land in the audit trail in the clear -----------------
+_PII = [
+    re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"),                  # CN mobile
+    re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),                   # email
+    re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)"),                 # CN id card
+    re.compile(r"(?<!\d)\d{16,19}(?!\d)"),                    # bank card
+]
+
 # --- output: hard-blocked disallowed content --------------------------------
 _BANNED = [
     re.compile(r"(制作|制造|如何(制作|制造)).{0,10}(炸弹|爆炸物|毒品|枪支)"),
@@ -79,6 +87,21 @@ def check_input(text: str) -> GuardResult:
     reasons += _match_any(text, "jailbreak", _JAILBREAK)
     reasons += _match_any(text, "privilege_escalation", _ESCALATION)
     return GuardResult(allowed=not reasons, reasons=reasons, text=text)
+
+
+def redact_pii(text: str) -> str:
+    """Mask secrets and personal identifiers before persistence.
+
+    The audit trail already stores an answer *hash* instead of the answer, but
+    the question was going in verbatim — and a support question is exactly where
+    a phone number or an email shows up. Same treatment, both directions.
+    """
+    if not text:
+        return text
+    out = text
+    for p in _SECRET + _PII:
+        out = p.sub("***", out)
+    return out
 
 
 def check_output(text: str) -> GuardResult:
