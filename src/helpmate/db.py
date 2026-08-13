@@ -135,7 +135,7 @@ def _hit_row(r) -> dict:
 
 def dense_search(embedding: list[float], n: int, tenant_id: Optional[str] = None) -> list[dict]:
     tenant_clause = "AND ch.tenant_id = %s " if tenant_id else ""
-    params = [json.dumps(embedding)] + ([tenant_id] if tenant_id else []) + [n]
+    params = ([tenant_id] if tenant_id else []) + [json.dumps(embedding), n]
     with _conn() as c, c.cursor() as cur:
         cur.execute(
             "SELECT ch.id, ch.content, ch.section_title, ch.source_url, d.title, ch.doc_type "
