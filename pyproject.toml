@@ -28,3 +28,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# `eval/` is a top-level package, not part of the installed `src/` distribution.
+# Plain `pytest` does not put the repo root on sys.path, so tests/test_metrics.py
+# fails to import it; `python -m pytest` happens to work. Pin it either way.
+pythonpath = ["."]

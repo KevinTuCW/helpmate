@@ -8,3 +8,5 @@ __pycache__/
 .env.*
 *.tmp
 *.new
+# local uv convenience; pip + pyproject stays the canonical install (see CI)
+uv.lock
