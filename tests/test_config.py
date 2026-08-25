@@ -29,17 +29,26 @@ def test_router_defaults_to_a_small_siliconflow_model():
     # Routing is classification, so it deliberately does not ride the answer model.
     s = Settings(_env_file=None, llm_provider="glm", glm_api_key="gk",
                  siliconflow_api_key="sk-x")
-    assert s.router_model == "Qwen/Qwen3-8B"
+    assert s.router_model_name() == "Qwen/Qwen3-8B"
     assert s.router_base_url() == "https://api.siliconflow.com/v1"
     assert s.router_api_key() == "sk-x"
     assert s.router_base_url() != s.resolved_base_url()
 
 
-def test_router_provider_llm_falls_back_to_the_answer_model_endpoint():
+def test_router_provider_llm_falls_back_to_the_answer_model_too():
+    # Endpoint *and* model have to move together: pointing routing at z.ai while
+    # still naming a SiliconFlow model 400s every request on `route`.
     s = Settings(_env_file=None, router_provider="llm", llm_provider="glm",
                  glm_api_key="gk", siliconflow_api_key="sk-x")
     assert s.router_base_url() == GLM_BASE_URL
     assert s.router_api_key() == "gk"
+    assert s.router_model_name() == s.llm_model
+
+
+def test_explicit_router_model_overrides_the_provider_default():
+    s = Settings(_env_file=None, router_provider="llm", llm_provider="glm",
+                 router_model="glm-4-flash")
+    assert s.router_model_name() == "glm-4-flash"
 
 
 def test_resolved_defaults_openai():

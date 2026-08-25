@@ -76,7 +76,7 @@ class OpenAILLM:
         # Routing runs on its own small model (see Settings.router_model), so the
         # answer model's cost and latency do not gate the branch decision.
         self._router = _client(s.router_base_url(), s.router_api_key())
-        self._router_model = s.router_model
+        self._router_model = s.router_model_name()
         self._router_provider = s.router_provider
 
     def complete(self, prompt: str) -> str:

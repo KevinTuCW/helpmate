@@ -44,7 +44,7 @@ def test_select_tool_uses_the_router_model_not_the_answer_model(monkeypatch):
 
     assert not answer_client.calls              # the answer model stays out of routing
     kw = router_client.calls[0]
-    assert kw["model"] == s.router_model
+    assert kw["model"] == s.router_model_name()
     assert router_client.base_url == s.router_base_url()
 
 

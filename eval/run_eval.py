@@ -105,7 +105,7 @@ def write_markdown(report: dict) -> list[str]:
     summ = report["summary"]
     lines = ["# helpmate 评测报告", "",
              f"- 样本数: {summ['n']}  ·  k={report['k']}  ·  生成模型: {s.llm_model}"
-             f"  ·  路由模型: {s.router_model}",
+             f"  ·  路由模型: {s.router_model_name()}",
              f"- 生成类指标(引用/RAGAS): {'已启用' if s.eval_generate else '本次跳过 (eval_generate=False，glm 生成过慢)'}",
              "", "## 汇总指标", "", "| 指标 | 值 | 阈值 | 结果 |", "| --- | --- | --- | --- |"]
     fails = []

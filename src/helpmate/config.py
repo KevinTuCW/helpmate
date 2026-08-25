@@ -3,6 +3,7 @@ from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 GLM_BASE_URL = "https://api.z.ai/api/paas/v4/"  # z.ai international endpoint
+SILICONFLOW_ROUTER_MODEL = "Qwen/Qwen3-8B"      # small, fast, reliable tool-calling
 
 
 class Settings(BaseSettings):
@@ -15,7 +16,7 @@ class Settings(BaseSettings):
     # Tool routing is classification, not generation: a small model picks the same
     # branch as glm-4.7 on the golden set at a quarter of the latency.
     router_provider: str = "siliconflow"   # "siliconflow" | "llm" (reuse the answer model)
-    router_model: str = "Qwen/Qwen3-8B"    # thinking off; see OpenAILLM.select_tool
+    router_model: str = ""                 # blank = the provider's default, see router_model_name()
     embed_provider: str = "siliconflow"          # "siliconflow" | "local"
     siliconflow_api_key: str = ""
     siliconflow_base_url: str = "https://api.siliconflow.com/v1"
@@ -69,6 +70,18 @@ class Settings(BaseSettings):
         if self.llm_provider == "glm":
             return self.glm_api_key or self.openai_api_key
         return self.openai_api_key or self.glm_api_key
+
+    def router_model_name(self) -> str:
+        """Routing model; blank `router_model` means "whatever this provider uses".
+
+        Without the fallback, flipping only `ROUTER_PROVIDER=llm` would send the
+        SiliconFlow model name to z.ai and every /chat would 400 on `route`.
+        """
+        if self.router_model:
+            return self.router_model
+        if self.router_provider == "siliconflow":
+            return SILICONFLOW_ROUTER_MODEL
+        return self.llm_model
 
     def router_base_url(self) -> Optional[str]:
         """Base URL for the routing model; falls back to the answer model's provider."""
