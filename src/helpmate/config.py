@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     llm_provider: str = "openai"          # "openai" | "glm" (any OpenAI-compatible)
     llm_base_url: str = ""                 # explicit override; blank = provider default
     llm_model: str = "glm-4.7"             # z.ai; thinking-on (disabling it corrupts output)
+    # Tool routing is classification, not generation: a small model picks the same
+    # branch as glm-4.7 on the golden set at a quarter of the latency.
+    router_provider: str = "siliconflow"   # "siliconflow" | "llm" (reuse the answer model)
+    router_model: str = "Qwen/Qwen3-8B"    # thinking off; see OpenAILLM.select_tool
     embed_provider: str = "siliconflow"          # "siliconflow" | "local"
     siliconflow_api_key: str = ""
     siliconflow_base_url: str = "https://api.siliconflow.com/v1"
@@ -65,6 +69,17 @@ class Settings(BaseSettings):
         if self.llm_provider == "glm":
             return self.glm_api_key or self.openai_api_key
         return self.openai_api_key or self.glm_api_key
+
+    def router_base_url(self) -> Optional[str]:
+        """Base URL for the routing model; falls back to the answer model's provider."""
+        if self.router_provider == "siliconflow":
+            return self.siliconflow_base_url
+        return self.resolved_base_url()
+
+    def router_api_key(self) -> str:
+        if self.router_provider == "siliconflow":
+            return self.siliconflow_api_key
+        return self.resolved_api_key()
 
     def embed_base_url(self) -> str:
         return self.siliconflow_base_url

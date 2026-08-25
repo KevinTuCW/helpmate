@@ -25,6 +25,23 @@ def test_embed_endpoint_defaults_to_siliconflow_com():
     assert s.embed_api_key() == "sk-x"
 
 
+def test_router_defaults_to_a_small_siliconflow_model():
+    # Routing is classification, so it deliberately does not ride the answer model.
+    s = Settings(_env_file=None, llm_provider="glm", glm_api_key="gk",
+                 siliconflow_api_key="sk-x")
+    assert s.router_model == "Qwen/Qwen3-8B"
+    assert s.router_base_url() == "https://api.siliconflow.com/v1"
+    assert s.router_api_key() == "sk-x"
+    assert s.router_base_url() != s.resolved_base_url()
+
+
+def test_router_provider_llm_falls_back_to_the_answer_model_endpoint():
+    s = Settings(_env_file=None, router_provider="llm", llm_provider="glm",
+                 glm_api_key="gk", siliconflow_api_key="sk-x")
+    assert s.router_base_url() == GLM_BASE_URL
+    assert s.router_api_key() == "gk"
+
+
 def test_resolved_defaults_openai():
     s = Settings(_env_file=None, openai_api_key="ok")
     assert s.resolved_base_url() is None

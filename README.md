@@ -40,7 +40,7 @@ helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线
 - 📄 **结构化 ingestion** —— HTML 清洗保留标题层级、PDF 表格用 PyMuPDF 抽取并转 Markdown、按章节切块并附元数据。
 - 🔍 **混合检索** —— dense（Qwen3-Embedding）+ sparse（Postgres 全文）经 **RRF 融合**，再由 **Qwen3-Reranker** 重排。中文语义靠向量，英文专有名词靠全文，各司其职。
 - 📌 **带引用的回答** —— 每条知识库回答都标注来源 `[n]`，无上下文即拒答。
-- 🧰 **Function Calling（辅助）** —— 订单/物流类少数实时问题自动旁路到 `query_order` / `query_logistics` 工具，其余走知识问答主路径。
+- 🧰 **Function Calling（辅助）** —— 订单/物流类少数实时问题自动旁路到 `query_order` / `query_logistics` 工具，其余走知识问答主路径。判意图交给小模型（Qwen3-8B），与生成模型分开配置。
 - 🔭 **全链路 Trace** —— 每次请求在 Langfuse 记录 route / retrieve / rerank / tool / generate，含模型、token、延迟。
 - 📊 **可复现评测** —— 50 条人工校验 golden set（+3 条跨租户负例）+ recall@k / MRR / nDCG / 工具路由 / 租户隔离 / 引用指标 + 贴基线阈值；golden 支持内容锚点，重灌库不失效。CI 硬门禁是单测（pytest），指标门禁跑本地/夜跑。
 - 🛡️ **安全护栏** —— 输入拦注入 / 越狱 / 越权诱导，输出脱敏 + 违规内容拦截；纯规则、零额外延迟。
@@ -52,14 +52,15 @@ helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线
 ## 🏗️ 架构
 
 ```text
-用户问题 ─▶ 输入护栏 ─▶ [多轮改写] ─▶ route（GLM 判意图）
+用户问题 ─▶ 输入护栏 ─▶ [多轮改写] ─▶ route（Qwen3-8B 判意图，小模型）
               ├─ 知识类（主）─▶ retrieve 混合检索（按 tenant 过滤）─▶ rerank（Qwen3）─┐
               │      dense pgvector(HNSW) + sparse tsvector(GIN) → RRF 融合
               └─ 订单/物流（辅）─▶ act：query_order / query_logistics ─┤
                                                                        ▼
-                    generate（GLM）─▶ 输出护栏 ─▶ 带[n]引用的答案 ─▶ 审计留痕 + 在线采样
+                    generate（GLM-4.7）─▶ 输出护栏 ─▶ 带[n]引用的答案 ─▶ 审计留痕 + 在线采样
 ```
 
+- **模型分工**：判意图是二选一的分类，不是生成 —— 交给小模型（Qwen3-8B）比让 GLM-4.7 兼职划算，路由 p50 从 ~13s 降到 ~3s 而 golden 集路由准确率仍是 1.00。
 - **摄取路径**：`loaders → clean → chunking → pipeline → Qwen3 embed → Postgres`
 - **应答路径**：`护栏(in) → [多轮改写] → route → (act | retrieve → rerank) → generate → 护栏(out) → 审计`，由 LangGraph 编排，Langfuse 全程埋点。
 
@@ -70,7 +71,8 @@ helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线
 | 关注点 | 选型 |
 | --- | --- |
 | API / 编排 | FastAPI · LangGraph |
-| 大模型 | **GLM-4.7**（z.ai，OpenAI 兼容） |
+| 生成模型 | **GLM-4.7**（z.ai，OpenAI 兼容） |
+| 路由模型 | **Qwen3-8B**（SiliconFlow，thinking 关闭）—— 判意图专用 |
 | 向量嵌入 | **Qwen3-Embedding-8B**（1024 维，SiliconFlow） |
 | 重排 | **Qwen3-Reranker-8B**（SiliconFlow） |
 | 存储 / 检索 | Postgres 16 + **pgvector**（HNSW）+ `tsvector`（GIN） |
@@ -102,7 +104,7 @@ python scripts/ingest_corpus.py        # 摄取 → chunks
 python scripts/backfill_embeddings.py  # Qwen3 回填向量 + 建 HNSW 索引
 
 # 4. 启动服务
-uvicorn helpmate.app:app --reload
+make run         # 等价于 uvicorn helpmate.app:app --reload --port 8000
 
 # （可选）跑测试 —— CI 的硬门禁
 make test        # 等价于 pytest -q
@@ -147,7 +149,7 @@ golden set 驱动的可复现评测闭环，一条命令出报告与门禁：
 python eval/run_eval.py     # → eval/report.md
 ```
 
-**最新基线**（53 条 = 50 条问答 + 3 条跨租户负例，`glm-4.7`，k=5）：
+**最新基线**（53 条 = 50 条问答 + 3 条跨租户负例，生成 `glm-4.7` / 路由 `Qwen3-8B`，k=5）：
 
 | 指标 | 值 | 阈值 | 结果 |
 | --- | --- | --- | --- |
@@ -158,6 +160,8 @@ python eval/run_eval.py     # → eval/report.md
 | nDCG@5 | 0.82 | — | — |
 
 > 阈值贴着基线留 ~3 个点余量：0.70 的旧阈值退化 20 个点仍会 PASS，那不是门禁。
+> `tool_routing` 换小模型后重跑仍是 53/53：小模型不加约束会在知识类问题上编一个占位单号误调工具（0.98），
+> 路由系统提示写死「没有真实单号就不调工具」后回到 1.00，顺带把路由 p50 又压掉 1 秒多。
 > `tenant_isolation` 是新增的跨租户负例（同一问题以外部租户身份检索必须零命中）。
 > 单测（`make test`）是 CI 硬门禁；`make gate` 这套指标需要真库 + 真 key，跑在本地/夜跑，不在 CI 内。
 
@@ -167,7 +171,7 @@ python eval/run_eval.py     # → eval/report.md
 
 每次 `/chat` 都是 Langfuse 里的一条 `chat-response` trace，观测树类型清晰：
 
-- `generation` —— GLM 的 route / generate（自动记模型 + token）
+- `generation` —— `route-select-tool`（Qwen3-8B）/ `generate-answer`（GLM-4.7），自动记模型 + token，两段延迟可分开看
 - `embedding` —— Qwen3 向量化
 - `retriever` —— `retrieve-context`（混合检索）
 - `span` —— `rerank-candidates`
@@ -187,7 +191,7 @@ helpmate/
 │   ├── sources.tsv
 │   └── manifest.jsonl
 ├── .github/workflows/ci.yml  # CI：pytest 硬门禁
-├── Makefile                  # make test / gate / ci
+├── Makefile                  # make run / test / gate / ci
 ├── db/
 │   ├── schema.sql             # documents / chunks(+tenant) / orders / shipments / audit_log / session_turns / online_eval
 │   ├── migrations/            # 001_governance_ops · 002_order_ownership（非破坏迁移）
@@ -203,7 +207,7 @@ helpmate/
 │   ├── app.py                 # FastAPI：/ingest /chat
 │   ├── config.py              # pydantic-settings 配置
 │   ├── obs.py                 # Langfuse 初始化 + 脱敏
-│   ├── providers.py           # GLM LLM 客户端（langfuse.openai drop-in）
+│   ├── providers.py           # LLM 客户端：生成(GLM) + 路由(Qwen3-8B)（langfuse.openai drop-in）
 │   ├── tools.py               # Function Calling 工具 + 分发
 │   ├── graph.py               # LangGraph 应答流
 │   ├── auth.py                # API Key → Principal(tenant, customer)
@@ -243,8 +247,9 @@ helpmate/
 | 变量 | 说明 |
 | --- | --- |
 | `DATABASE_URL` | Postgres 连接串 |
-| `LLM_PROVIDER` / `LLM_MODEL` | `glm` / `glm-4.7`（z.ai，base URL 内置默认） |
+| `LLM_PROVIDER` / `LLM_MODEL` | 生成模型：`glm` / `glm-4.7`（z.ai，base URL 内置默认） |
 | `GLM_API_KEY` | GLM(z.ai) 密钥 |
+| `ROUTER_PROVIDER` / `ROUTER_MODEL` | 路由模型：`siliconflow` / `Qwen/Qwen3-8B`；设 `ROUTER_PROVIDER=llm` 则退回用 `LLM_MODEL` 判意图 |
 | `EMBED_MODEL` / `EMBED_DIM` | `Qwen/Qwen3-Embedding-8B` / `1024` |
 | `RERANK_MODEL` | `Qwen/Qwen3-Reranker-8B` |
 | `SILICONFLOW_API_KEY` | SiliconFlow 密钥 |
@@ -267,7 +272,7 @@ helpmate/
 - [x] **阶段⑤** 治理层：输入/输出护栏 · 审计留痕(问题侧脱敏) · 多租户过滤 · API Key 身份 + 订单行级归属校验
 - [x] **阶段⑥** 运营层：多轮会话 + 指代消解 · 在线采样回流
 - [ ] 专题：检索父子块 + 元数据过滤（拉起 manual recall）
-- [ ] 专题：延迟分级路由 + 流式（p50 38s → 面客可接受）
+- [ ] 专题：延迟分级路由 + 流式（p50 38s → 面客可接受）—— 判意图已下放小模型（route p50 13s → 3s），生成侧流式待做
 - [ ] 生成类指标默认开启（需更快的 judge 模型）
 - [ ] 真多模态（图像 OCR / 视频转写）· 完整在线 A/B —— 阵 04
 

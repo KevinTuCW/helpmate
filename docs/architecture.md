@@ -20,7 +20,7 @@ retrieval query. These are core v1 capabilities, not add-ons.
   POST /ingest ──────────────▶│ loaders → chunking → pipeline → (Qwen3 embed) → Postgres           │
                               │                                                                     │
   POST /chat  ──▶ @observe ──▶│ guardrail(in) → [multi-turn rewrite] → LangGraph → guardrail(out)   │
-   (Langfuse root trace)      │    route ──(GLM tool-choice)──┐            → audit_log + sample      │
+   (Langfuse root trace)      │  route ─(Qwen3-8B tool-choice)┐            → audit_log + sample      │
                               │      │ tool_call?             │ none                                │
                               │      ▼                        ▼                                     │
                               │    act (dispatch_tool)     retrieve (hybrid, tenant-scoped) ─▶ rerank│
@@ -30,7 +30,7 @@ retrieval query. These are core v1 capabilities, not add-ons.
                               │                    │ answer with [n] citations                      │
                               └────────────────────┼────────────────────────────────────────────────┘
                                    Postgres 16 + pgvector          z.ai (GLM-4.7)   SiliconFlow (Qwen3)
-                               documents / chunks(vector,tsv)                        embed + rerank
+                               documents / chunks(vector,tsv)      generate         embed + rerank + route
                                orders / shipments                        Langfuse (all spans)
 ```
 
@@ -69,7 +69,12 @@ Hybrid, so Chinese semantics and English proper nouns are both covered:
 ## Generation & orchestration (`graph.py`, `providers.py`)
 
 - LangGraph nodes: `route` → (`act` | `retrieve` → rerank) → `generate`.
-- `route`/`generate` call **GLM-4.7** (`OpenAILLM`, z.ai base URL, thinking-on).
+- `generate` calls **GLM-4.7** (`OpenAILLM`, z.ai base URL, thinking-on).
+- `route` calls **Qwen3-8B** on SiliconFlow (thinking off) through a second client
+  in the same `OpenAILLM`. Picking a branch is classification, not generation:
+  the small model matches GLM-4.7's 1.00 routing score on the golden set at
+  roughly a quarter of the latency (p50 ~13s → ~3s). `ROUTER_PROVIDER=llm`
+  routes with `LLM_MODEL` again if the split is not wanted.
 - Prompt constrains answers to the provided context and preserves `[n]` citations;
   refuses when context is insufficient.
 
@@ -80,7 +85,9 @@ real-time order/logistics queries; everything else goes through knowledge-base
 retrieval. Tools are declared in OpenAI `tools` JSON-Schema format (`query_order`,
 `query_logistics`). `route` uses the model's native tool-choice (defaulting to
 retrieval); `dispatch_tool` runs the selected tool against `orders`/`shipments`.
-Tool results feed `generate`.
+Tool results feed `generate`. The router carries a system prompt forbidding it
+from inventing an order id — left unprompted, a small model answers knowledge-base
+questions with a fabricated `order_id` and misroutes them (0.98 vs 1.00).
 
 ## Governance & safety (`security/`)
 
@@ -157,6 +164,7 @@ under a `chat-response` root trace with question/answer I/O, `session_id`, `tags
 ## Configuration (`config.py`)
 
 All providers are OpenAI-compatible and env-driven: `LLM_*` (GLM on z.ai),
+`ROUTER_*` (routing model, SiliconFlow by default),
 `SILICONFLOW_*` + `EMBED_*`/`RERANK_MODEL` (Qwen3), `LANGFUSE_*`, `DATABASE_URL`,
 retrieval (`TOP_K`, `retrieve_candidates`) and eval knobs (`eval_recall_k`,
 `eval_generate`, `eval_thresholds`). Governance & ops knobs: `default_tenant`,

@@ -5,6 +5,16 @@ import re
 from typing import Optional
 from helpmate.config import get_settings
 
+# A small router left unprompted invents an order id (literally `order_id`) for
+# knowledge-base questions and routes them to the tool. Spelling out the "no id,
+# no tool" rule takes the golden-set routing score from 0.98 back to 1.00 and
+# shortens the reply, so the call also gets faster.
+ROUTER_SYSTEM = (
+    "Call a tool only when the user asks about a specific order and the message "
+    "contains an actual order id. Otherwise answer nothing and call no tool. "
+    "Never invent or guess an order id."
+)
+
 
 class LocalHashingEmbedder:
     """Dependency-free bag-of-words hashing embedder, L2-normalized.
@@ -26,8 +36,11 @@ class LocalHashingEmbedder:
         return [v / norm for v in vec]
 
 
-def _client():
+def _client(base_url: Optional[str] = None, api_key: Optional[str] = None):
     """An OpenAI-compatible client pointed at the configured provider (OpenAI or GLM).
+
+    Pass base_url/api_key to target a different OpenAI-compatible endpoint — the
+    routing model lives on SiliconFlow while the answer model lives on z.ai.
 
     Uses the langfuse.openai drop-in so chat/tool-call completions are auto-traced
     as `generation` observations (model, tokens, latency) under the current trace.
@@ -36,7 +49,8 @@ def _client():
     s = get_settings()
     # Timeout + retries are not optional on a customer-facing path: without them
     # one hung upstream request hangs the whole /chat call.
-    return OpenAI(base_url=s.resolved_base_url(), api_key=s.resolved_api_key() or None,
+    return OpenAI(base_url=base_url if base_url is not None else s.resolved_base_url(),
+                  api_key=(s.resolved_api_key() if api_key is None else api_key) or None,
                   timeout=s.llm_timeout_s, max_retries=s.llm_max_retries)
 
 
@@ -56,8 +70,14 @@ class OpenAIEmbedder:
 
 class OpenAILLM:
     def __init__(self) -> None:
+        s = get_settings()
         self._c = _client()
-        self._model = get_settings().llm_model
+        self._model = s.llm_model
+        # Routing runs on its own small model (see Settings.router_model), so the
+        # answer model's cost and latency do not gate the branch decision.
+        self._router = _client(s.router_base_url(), s.router_api_key())
+        self._router_model = s.router_model
+        self._router_provider = s.router_provider
 
     def complete(self, prompt: str) -> str:
         r = self._c.chat.completions.create(
@@ -67,11 +87,17 @@ class OpenAILLM:
         return r.choices[0].message.content or ""
 
     def select_tool(self, question: str, schemas: list[dict]) -> Optional[dict]:
-        r = self._c.chat.completions.create(
-            model=self._model,
-            messages=[{"role": "user", "content": question}],
+        # Qwen3 is a hybrid-reasoning model and thinks by default; for a two-way
+        # branch that only buys latency, so turn it off. The flag is a SiliconFlow
+        # extension — sending it to z.ai/OpenAI is an error, hence the guard.
+        extra = {"enable_thinking": False} if self._router_provider == "siliconflow" else None
+        r = self._router.chat.completions.create(
+            model=self._router_model,
+            messages=[{"role": "system", "content": ROUTER_SYSTEM},
+                      {"role": "user", "content": question}],
             tools=schemas,
             tool_choice="auto",
+            extra_body=extra,
             name="route-select-tool",
         )
         msg = r.choices[0].message
