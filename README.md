@@ -249,7 +249,8 @@ helpmate/
 │   ├── ingest_corpus.py       # 批量摄取
 │   └── backfill_embeddings.py # 回填向量 + 建 HNSW
 ├── src/helpmate/
-│   ├── app.py                 # FastAPI：/ingest /chat
+│   ├── app.py                 # FastAPI：/ingest /chat /chat/stream /suggest/*
+│   ├── suggest.py             # 推荐问题：热门(SQL) · 联想(SQL) · 追问(小模型)
 │   ├── config.py              # pydantic-settings 配置
 │   ├── obs.py                 # Langfuse 初始化 + 脱敏
 │   ├── providers.py           # LLM 客户端：生成(GLM) + 路由(Qwen3-8B)（langfuse.openai drop-in）
@@ -281,7 +282,12 @@ helpmate/
 │   ├── ragas_eval.py          # RAGAS 生成质量指标
 │   └── report.md              # 最新评测报告
 ├── web/
-│   └── index.html             # 极简聊天前端
+│   ├── index.html             # 演示宿主页（假官网），一行 script 引入挂件
+│   └── widget/                # 客服挂件（零构建原生 ES Module）
+│       ├── index.js           # 入口：Shadow DOM 装配 + 自动弹窗策略
+│       ├── api.js             # 传输：SSE 解析 · session · 三个推荐接口
+│       ├── ui.js              # 渲染：气泡 · chips · 联想 · 引用折叠
+│       └── style.css          # 挂件样式（注入 Shadow Root）
 └── tests/                     # pytest 单元测试
 ```
 
