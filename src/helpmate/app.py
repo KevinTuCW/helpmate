@@ -346,3 +346,8 @@ def suggest_followups(req: FollowupReq,
 @app.get("/")
 def index():
     return FileResponse(WEB / "index.html")
+
+
+# Mounted last: a mount swallows every path beneath it, so it must not be
+# declared before the API routes.
+app.mount("/widget", StaticFiles(directory=WEB / "widget"), name="widget")

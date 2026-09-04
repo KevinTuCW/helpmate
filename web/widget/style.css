@@ -1,0 +1,126 @@
+/* Injected into the widget's shadow root. Nothing here leaks to the host page,
+   and nothing on the host page reaches in — which is the whole reason this is a
+   shadow root and not a div. */
+:host {
+  --hm-ink: #1a1a1a;
+  --hm-ink-2: #767676;
+  --hm-line: #e6e6e6;
+  --hm-soft: #f5f6f7;
+  --hm-blue: #0b6cff;
+  --hm-radius: 12px;
+  all: initial;
+  font: 14px/1.65 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--hm-ink);
+}
+* { box-sizing: border-box; }
+
+.fab {
+  position: fixed; right: 24px; bottom: 24px; z-index: 2147483000;
+  width: 56px; height: 56px; border: 0; border-radius: 50%;
+  background: var(--hm-ink); color: #fff; cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0,0,0,.22);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .15s ease;
+}
+.fab:hover { transform: translateY(-2px); }
+.fab svg { width: 24px; height: 24px; fill: currentColor; }
+
+.panel {
+  position: fixed; right: 24px; bottom: 24px; z-index: 2147483000;
+  width: 380px; height: 640px; max-height: calc(100vh - 48px);
+  background: #fff; border: 1px solid var(--hm-line);
+  border-radius: var(--hm-radius); box-shadow: 0 12px 40px rgba(0,0,0,.18);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.panel[hidden], .fab[hidden] { display: none; }
+
+.hd { display: flex; align-items: center; gap: 8px;
+      padding: 14px 16px; border-bottom: 1px solid var(--hm-line); }
+.hd b { font-size: 15px; font-weight: 600; flex: 1; }
+.hd button { border: 0; background: none; cursor: pointer; color: var(--hm-ink-2);
+             font-size: 18px; line-height: 1; padding: 4px 6px; border-radius: 6px; }
+.hd button:hover { background: var(--hm-soft); color: var(--hm-ink); }
+.back { display: none; }
+
+.bd { flex: 1; overflow-y: auto; padding: 16px; display: flex;
+      flex-direction: column; gap: 12px; }
+
+.msg { max-width: 84%; padding: 10px 12px; border-radius: 12px; white-space: pre-wrap;
+       word-break: break-word; }
+.msg.a { align-self: flex-start; background: var(--hm-soft); border-bottom-left-radius: 4px; }
+.msg.u { align-self: flex-end; background: var(--hm-blue); color: #fff;
+         border-bottom-right-radius: 4px; }
+.msg .cursor { display: inline-block; width: 6px; height: 15px; margin-left: 2px;
+               background: var(--hm-blue); vertical-align: -2px;
+               animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.stage { align-self: flex-start; color: var(--hm-ink-2); font-size: 12.5px;
+         display: flex; align-items: center; gap: 6px; }
+.stage::before { content: ""; width: 6px; height: 6px; border-radius: 50%;
+                 background: var(--hm-blue); animation: pulse 1.1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+.stage .retry { border: 1px solid var(--hm-line); background: #fff; color: var(--hm-blue);
+                cursor: pointer; border-radius: 6px; padding: 2px 8px; font: inherit;
+                font-size: 12px; margin-left: 6px; }
+
+.lab { color: #9aa0ab; font-size: 12px; letter-spacing: .3px; }
+
+.hot { display: flex; flex-direction: column; gap: 6px; }
+.hot button { text-align: left; font: inherit; cursor: pointer; color: var(--hm-blue);
+              background: #fafbfe; border: 1px solid #dde3ef; border-radius: 8px;
+              padding: 8px 10px; }
+.hot button:hover { background: #f0f5ff; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button { font: inherit; font-size: 13px; cursor: pointer; color: var(--hm-blue);
+                background: #f4f8ff; border: 1px solid #cfdcf8; border-radius: 14px;
+                padding: 4px 10px; }
+.chips button:hover { background: #e8f0ff; }
+
+.cites { margin-top: 8px; border-top: 1px solid #e3e5e8; padding-top: 6px; }
+.cites summary { cursor: pointer; color: var(--hm-ink-2); font-size: 12.5px; list-style: none; }
+.cites summary::-webkit-details-marker { display: none; }
+.cites summary::after { content: " ▾"; }
+.cites[open] summary::after { content: " ▴"; }
+.cites ol { margin: 6px 0 0; padding-left: 18px; }
+.cites li { font-size: 12.5px; margin: 2px 0; }
+.cites a { color: var(--hm-blue); text-decoration: none; }
+.cites a:hover { text-decoration: underline; }
+.cites li.on { background: #fff6d6; border-radius: 4px; }
+.msg .sup { color: var(--hm-blue); cursor: pointer; font-size: 12px;
+            vertical-align: super; padding: 0 1px; }
+
+.ft { border-top: 1px solid var(--hm-line); padding: 10px 12px;
+      display: flex; align-items: flex-end; gap: 8px; position: relative; }
+.ft textarea {
+  flex: 1; border: 0; outline: 0; resize: none; font: inherit; color: inherit;
+  max-height: 96px; padding: 6px 0; background: none;
+}
+.ft button {
+  border: 0; background: var(--hm-blue); color: #fff; cursor: pointer;
+  width: 32px; height: 32px; border-radius: 8px; font-size: 16px; line-height: 1;
+}
+.ft button:disabled { background: var(--hm-line); color: #aaa; cursor: default; }
+
+.ac { position: absolute; left: 0; right: 0; bottom: 100%; background: #fff;
+      border-top: 1px solid var(--hm-line); box-shadow: 0 -6px 16px rgba(0,0,0,.06);
+      max-height: 180px; overflow-y: auto; }
+.ac[hidden] { display: none; }
+.ac div { padding: 8px 12px; cursor: pointer; }
+.ac div:hover, .ac div.on { background: var(--hm-soft); }
+.ac b { color: var(--hm-blue); font-weight: 600; }
+
+/* Phone: the panel is the page. 100dvh rather than 100vh because vh does not
+   account for the mobile address bar collapsing, which makes the input box jump. */
+@media (max-width: 767px) {
+  .panel {
+    right: 0; bottom: 0; left: 0; top: 0;
+    width: 100%; height: 100dvh; max-height: none;
+    border: 0; border-radius: 0;
+  }
+  .fab { right: 16px; bottom: 16px; }
+  .hd .back { display: block; font-size: 22px; }
+  .hd .close { display: none; }
+  .msg { max-width: 88%; }
+}

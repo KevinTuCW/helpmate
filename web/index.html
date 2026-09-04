@@ -1,20 +1,63 @@
 <!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>helpmate</title>
-<style>body{font-family:system-ui;max-width:640px;margin:40px auto;padding:0 16px}
-#log{white-space:pre-wrap;border:1px solid #ccc;border-radius:8px;padding:16px;min-height:120px}
-input{width:78%;padding:8px} button{padding:8px 16px}</style></head>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>DJI 大疆创新 · 服务与支持（helpmate demo）</title>
+<style>
+  :root { --ink:#1a1a1a; --ink2:#767676; --line:#e6e6e6; --soft:#f5f6f7; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+         color:var(--ink); background:#fff; }
+  header { position:sticky; top:0; z-index:10; background:rgba(255,255,255,.92);
+           backdrop-filter:saturate(180%) blur(12px); border-bottom:1px solid var(--line); }
+  nav { max-width:1080px; margin:0 auto; padding:0 24px; height:56px;
+        display:flex; align-items:center; gap:28px; }
+  nav .logo { font-weight:700; letter-spacing:2px; }
+  nav a { color:var(--ink); text-decoration:none; font-size:14px; }
+  nav a:hover { color:#0b6cff; }
+  .hero { max-width:1080px; margin:0 auto; padding:80px 24px 56px; }
+  .hero h1 { font-size:44px; line-height:1.25; margin:0 0 16px; letter-spacing:-1px; }
+  .hero p { color:var(--ink2); max-width:520px; margin:0; }
+  .grid { max-width:1080px; margin:0 auto; padding:0 24px 80px;
+          display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:20px; }
+  .card { border:1px solid var(--line); border-radius:10px; padding:24px; background:var(--soft); }
+  .card h3 { margin:0 0 8px; font-size:17px; }
+  .card p { margin:0; color:var(--ink2); font-size:14px; }
+  .filler { max-width:1080px; margin:0 auto; padding:0 24px 120px; color:var(--ink2); }
+  footer { border-top:1px solid var(--line); padding:32px 24px; text-align:center;
+           color:var(--ink2); font-size:13px; }
+  @media (max-width:767px) { .hero { padding:48px 24px 32px; } .hero h1 { font-size:32px; } }
+</style>
+</head>
 <body>
-<h1>helpmate</h1>
-<div id="log">Ask about your knowledge base — or an order like "Where is order A1001?"</div>
-<p><input id="q" placeholder="Your question..."><button onclick="ask()">Ask</button></p>
-<script>
-async function ask(){
-  const q=document.getElementById('q').value, log=document.getElementById('log');
-  log.textContent='...';
-  const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({question:q})});
-  const d=await r.json(); log.textContent=d.answer;
-}
-</script>
-</body></html>
+<header>
+  <nav>
+    <span class="logo">DJI</span>
+    <a href="#">消费级无人机</a><a href="#">行业应用</a><a href="#">配件</a>
+    <a href="#">服务与支持</a><a href="#">下载</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <h1>服务与支持</h1>
+  <p>产品手册、保修政策、限飞查询与订单物流。找不到答案？右下角的智能客服随时在。</p>
+</section>
+
+<section class="grid">
+  <div class="card"><h3>产品手册</h3><p>Mini / Air / Mavic 全系用户手册与快速入门。</p></div>
+  <div class="card"><h3>保修政策</h3><p>整机保修、DJI Care 随心换与换新服务条款。</p></div>
+  <div class="card"><h3>限飞查询</h3><p>查询限飞区、授权区，以及解禁申请流程。</p></div>
+  <div class="card"><h3>订单与物流</h3><p>查询订单状态、发货进度与退换货处理。</p></div>
+</section>
+
+<section class="filler">
+  <p>这是 helpmate 的演示宿主页，用来验证挂件在真实网站里的表现：宿主页照常滚动和点击，挂件不抢焦点、不改宿主页样式。</p>
+</section>
+
+<footer>helpmate demo · 本页仅用于演示，非大疆官方页面</footer>
+
+<script type="module" src="/widget/index.js" data-api="/"></script>
+</body>
+</html>
