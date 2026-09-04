@@ -74,3 +74,27 @@ def test_search_questions_escapes_wildcards_in_user_input(monkeypatch):
     db.search_questions("100%", "dji")
     _, params = log[0]
     assert params[1] == r"%100\%%"
+
+
+# --- Chinese FTS -------------------------------------------------------------
+# Documents and queries must go through the same segmentation. If either side
+# skips it the index fills up with surrogates nothing ever searches for, and FTS
+# silently returns nothing — the exact failure this replaced.
+
+def test_insert_chunk_row_writes_a_segmented_tsvector(monkeypatch):
+    log = _patch_conn(monkeypatch, [])
+    db.insert_chunk_row(1, {"chunk_index": 0, "content": "限飞区解禁",
+                            "doc_type": "policy"})
+    sql, params = log[0]
+    assert "content_tsv" in sql and "to_tsvector('simple', %s)" in sql
+    from helpmate.retrieve.segment import segment
+    assert segment("限飞区解禁") in params
+
+
+def test_fts_search_segments_the_query_before_binding(monkeypatch):
+    from helpmate.retrieve.segment import segment_query
+    log = _patch_conn(monkeypatch, [])
+    db.fts_search("解禁", 5, "dji")
+    _, params = log[0]
+    assert segment_query("解禁") in params
+    assert "解禁" not in params        # the raw term would match nothing

@@ -10,6 +10,7 @@ only checks the returned rows.
 from contextlib import contextmanager
 
 from helpmate import db
+from helpmate.retrieve.segment import segment_query
 
 _ROW = (1, "DJI Care 随心换覆盖进水。", "保障范围",
         "https://example.com/care", "DJI Care FAQ", "faq")
@@ -91,7 +92,9 @@ def test_fts_search_repeats_the_query_around_the_tenant_param(monkeypatch):
     sql, params = log[0]
     assert "ch.tenant_id = %s" in sql
     # websearch_to_tsquery appears twice (filter + rank), tenant sits between.
-    assert params == ("进水 保修", "dji", "进水 保修", 5)
+    # The bound term is the segmented form — a raw Chinese term matches nothing.
+    q = segment_query("进水 保修")
+    assert params == (q, "dji", q, 5)
 
 
 def test_fts_search_without_a_tenant_drops_the_filter_and_the_param(monkeypatch):
@@ -100,7 +103,8 @@ def test_fts_search_without_a_tenant_drops_the_filter_and_the_param(monkeypatch)
 
     sql, params = log[0]
     assert "tenant_id" not in sql
-    assert params == ("进水 保修", "进水 保修", 5)
+    q = segment_query("进水 保修")
+    assert params == (q, q, 5)
 
 
 def test_a_foreign_tenant_cannot_be_reached_through_retrieval(monkeypatch):

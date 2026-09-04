@@ -4,6 +4,7 @@ import psycopg
 from contextlib import contextmanager
 from typing import Optional
 from helpmate.config import get_settings
+from helpmate.retrieve.segment import segment, segment_query
 
 _POOL = None
 
@@ -54,11 +55,11 @@ def insert_chunk_row(document_id: int, ch: dict) -> None:
     with _conn() as c, c.cursor() as cur:
         cur.execute(
             "INSERT INTO chunks (document_id, tenant_id, chunk_index, content, section_title, "
-            "doc_type, product, source_url, lang) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "doc_type, product, source_url, lang, content_tsv) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, to_tsvector('simple', %s))",
             (document_id, ch.get("tenant_id", "public"), ch["chunk_index"], ch["content"],
              ch.get("section_title"), ch["doc_type"], ch.get("product"),
-             ch.get("source_url"), ch.get("lang", "zh")),
+             ch.get("source_url"), ch.get("lang", "zh"), segment(ch["content"])),
         )
 
 
@@ -148,8 +149,11 @@ def dense_search(embedding: list[float], n: int, tenant_id: Optional[str] = None
 
 
 def fts_search(query: str, n: int, tenant_id: Optional[str] = None) -> list[dict]:
+    # The query goes through the same segmentation as the documents did; a raw
+    # Chinese term matches nothing, silently (see retrieve/segment.py).
+    q = segment_query(query)
     tenant_clause = "AND ch.tenant_id = %s " if tenant_id else ""
-    params = [query] + ([tenant_id] if tenant_id else []) + [query, n]
+    params = [q] + ([tenant_id] if tenant_id else []) + [q, n]
     with _conn() as c, c.cursor() as cur:
         cur.execute(
             "SELECT ch.id, ch.content, ch.section_title, ch.source_url, d.title, ch.doc_type "

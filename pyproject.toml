@@ -13,6 +13,7 @@ dependencies = [
   "python-multipart>=0.0.9",
   "httpx[socks]>=0.27",
   "beautifulsoup4>=4.12",
+  "jieba>=0.42",           # CJK segmentation: Postgres' parser cannot tokenize Chinese
   "pymupdf>=1.24",
   "langfuse>=4.14",
   "ragas>=0.2",            # eval generation-quality metrics (eval_generate=True path)

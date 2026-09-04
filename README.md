@@ -10,7 +10,7 @@
 [![LangGraph](https://img.shields.io/badge/LangGraph-orchestration-1C3C3C.svg)](https://langchain-ai.github.io/langgraph/)
 [![pgvector](https://img.shields.io/badge/pgvector-HNSW-336791.svg?logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 [![Langfuse](https://img.shields.io/badge/Langfuse-tracing-fbbf24.svg)](https://langfuse.com/)
-[![recall@5](https://img.shields.io/badge/recall%405-0.91-brightgreen.svg)](#-评测)
+[![recall@5](https://img.shields.io/badge/recall%405-0.93-brightgreen.svg)](#-评测)
 
 「武道AI / AI Engineering Dojo」**以阵制胜**系列 · 阵 01 · 从 0 到 1 的真实业务系统
 
@@ -39,7 +39,7 @@ helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线
 
 - 🗂️ **真实中文语料** —— 17 篇 DJI 文档 → 926 个 chunk，中文为主、夹杂大量英文专有名词（OcuSync、RTH、DJI Care…）。
 - 📄 **结构化 ingestion** —— HTML 清洗保留标题层级、PDF 表格用 PyMuPDF 抽取并转 Markdown、按章节切块并附元数据。
-- 🔍 **混合检索** —— dense（Qwen3-Embedding）+ sparse（Postgres 全文）经 **RRF 融合**，再由 **Qwen3-Reranker** 重排。中文语义靠向量，英文专有名词靠全文，各司其职。
+- 🔍 **混合检索** —— dense（Qwen3-Embedding）+ sparse（Postgres 全文 + jieba 分词）经 **RRF 融合**，再由 **Qwen3-Reranker** 重排。中文语义靠向量，型号与参数靠全文，各司其职。
 - 📌 **带引用的回答** —— 每条知识库回答都标注来源 `[n]`，无上下文即拒答。
 - 🧰 **Function Calling（辅助）** —— 订单/物流类少数实时问题自动旁路到 `query_order` / `query_logistics` 工具，其余走知识问答主路径。判意图交给小模型（Qwen3-8B），与生成模型分开配置。
 - 🔭 **全链路 Trace** —— 每次请求在 Langfuse 记录 route / retrieve / rerank / tool / generate，含模型、token、延迟。
@@ -94,6 +94,8 @@ psql "$DATABASE_URL" -f db/seed.sql
 # 已有旧库、不想重灌语料？改用非破坏迁移：
 # psql "$DATABASE_URL" -f db/migrations/001_governance_ops.sql
 # psql "$DATABASE_URL" -f db/migrations/002_order_ownership.sql   # 订单归属列
+# psql "$DATABASE_URL" -f db/migrations/003_cjk_fts.sql           # 中文全文检索
+# python -m scripts.backfill_tsv     # 003 之后必跑：重算 content_tsv（纯本地，无 API 开销）
 
 # 2. 配置密钥
 cp .env.example .env        # 填入 GLM / SiliconFlow / Langfuse key
@@ -198,11 +200,16 @@ python eval/run_eval.py     # → eval/report.md
 
 | 指标 | 值 | 阈值 | 结果 |
 | --- | --- | --- | --- |
-| recall@5 | **0.91** | 0.88 | ✅ |
+| recall@5 | **0.93** | 0.88 | ✅ |
 | tool_routing | **1.00** | 0.95 | ✅ |
-| tenant_isolation | 待重跑 | 1.00 | — |
-| MRR | 0.79 | — | — |
-| nDCG@5 | 0.82 | — | — |
+| tenant_isolation | **1.00** | 1.00 | ✅ |
+| MRR | 0.80 | — | — |
+| nDCG@5 | 0.83 | — | — |
+
+> recall@5 从 0.91 升到 0.93，是修好中文全文检索换来的：`content_tsv` 原本是 `to_tsvector('simple', content)`，
+> 而 Postgres 默认解析器按数据库 ctype 判断字符类别 —— macOS 上 CJK 被判成 `blank` 直接丢弃（tsvector 为空），
+> glibc 上则整段塌成一个 token。两种情况下中文查询都是 0 命中，所谓「混合检索」对中文实际只有 dense 一条腿。
+> 现在改成 jieba 分词 + 非 ASCII 词映射为 ASCII 代词，「限飞」的全文命中从 0 变成 38 条。
 
 > 阈值贴着基线留 ~3 个点余量：0.70 的旧阈值退化 20 个点仍会 PASS，那不是门禁。
 > `tool_routing` 换小模型后重跑仍是 53/53：小模型不加约束会在知识类问题上编一个占位单号误调工具（0.98），
@@ -247,7 +254,8 @@ helpmate/
 ├── scripts/
 │   ├── fetch_corpus.py        # 抓取语料
 │   ├── ingest_corpus.py       # 批量摄取
-│   └── backfill_embeddings.py # 回填向量 + 建 HNSW
+│   ├── backfill_embeddings.py # 回填向量 + 建 HNSW
+│   └── backfill_tsv.py        # 重算 content_tsv（改分词规则后重跑，纯本地零 API 开销）
 ├── src/helpmate/
 │   ├── app.py                 # FastAPI：/ingest /chat /chat/stream /suggest/*
 │   ├── suggest.py             # 推荐问题：热门(SQL) · 联想(SQL) · 追问(小模型)
@@ -272,6 +280,7 @@ helpmate/
 │       ├── embed.py           # Qwen3 嵌入客户端
 │       ├── fuse.py            # RRF 融合
 │       ├── rerank.py          # Qwen3 重排
+│       ├── segment.py         # 中文分词 → ASCII 代词（Postgres 解析器不认中文）
 │       ├── hybrid.py          # dense+FTS→RRF→rerank 编排
 │       └── context.py         # 带引用的上下文拼装
 ├── eval/
@@ -318,7 +327,7 @@ helpmate/
 
 - ✅ **阶段①** 真实 DJI 中文语料 + 结构化 ingestion（含 boilerplate 清洗）
 - ✅ **阶段②** Qwen3 嵌入回填 + HNSW + dense/FTS/RRF + Qwen3 重排
-- ✅ **阶段③** 50 条 golden set + 指标 + 报告门禁（recall@5=0.91）+ CI（pytest 硬门禁）
+- ✅ **阶段③** 50 条 golden set + 指标 + 报告门禁（recall@5=0.93）+ CI（pytest 硬门禁）
 - ✅ **阶段④** Langfuse v4 全链路 trace
 - ✅ **阶段⑤** 治理层：输入/输出护栏 · 审计留痕(问题侧脱敏) · 多租户过滤 · API Key 身份 + 订单行级归属校验
 - ✅ **阶段⑥** 运营层：多轮会话 + 指代消解 · 在线采样回流

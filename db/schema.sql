@@ -26,7 +26,10 @@ CREATE TABLE chunks (
     source_url    TEXT,
     lang          TEXT DEFAULT 'zh',
     embedding     VECTOR(1024),             -- filled in phase 2
-    content_tsv   tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
+    -- Written at ingest from helpmate.retrieve.segment.segment(), not generated
+    -- from `content`: the default parser cannot tokenize Chinese. See
+    -- db/migrations/003_cjk_fts.sql and helpmate/retrieve/segment.py.
+    content_tsv   tsvector,
     UNIQUE (document_id, chunk_index)
 );
 
