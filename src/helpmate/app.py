@@ -3,6 +3,7 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pathlib import Path
+from typing import Optional
 from langfuse import observe, get_client, propagate_attributes
 
 from helpmate import db
@@ -57,6 +58,31 @@ def ingest(req: IngestReq, principal: Principal = Depends(require_principal)):
     return {**r, "embedded": embedded}
 
 
+def _persist_turn(*, tenant: str, req: "ChatReq", decision: str,
+                  tool_name: Optional[str], guard_reasons: list[str],
+                  answer: str, hits: list[dict], remember: bool = True) -> None:
+    """Every side effect a finished turn owes the system, in one place.
+
+    Both `/chat` and `/chat/stream` call this. Duplicating it would eventually
+    mean one path stops writing the audit row — a governance blind spot that no
+    test would notice unless it is pinned here.
+
+    `remember=False` for a blocked input: it still gets audited, but an injection
+    attempt must not enter the multi-turn memory that rewrites later queries.
+    """
+    s = get_settings()
+    db.write_audit(tenant_id=tenant, session_id=req.session_id,
+                   question=redact_pii(req.question), decision=decision,
+                   tool_call=tool_name, guard=guard_reasons, answer=answer)
+    if remember and req.session_id:
+        db.append_turn(req.session_id, "user", req.question)
+        db.append_turn(req.session_id, "assistant", answer)
+    if should_sample(req.session_id or req.question, s.online_sample_rate):
+        db.capture_sample(tenant_id=tenant, session_id=req.session_id,
+                          question=redact_pii(req.question), answer=answer,
+                          hit_ids=[h.get("chunk_id") for h in hits])
+
+
 @app.post("/chat")
 @observe(name="chat-response", capture_input=False)
 def chat(req: ChatReq, principal: Principal = Depends(require_principal)):
@@ -72,9 +98,9 @@ def chat(req: ChatReq, principal: Principal = Depends(require_principal)):
         if s.guardrails_enabled:
             gin = check_input(req.question)
             if gin.blocked:
-                db.write_audit(tenant_id=tenant, session_id=req.session_id,
-                               question=redact_pii(req.question), decision="blocked_input",
-                               tool_call=None, guard=gin.reasons, answer="")
+                _persist_turn(tenant=tenant, req=req, decision="blocked_input",
+                              tool_name=None, guard_reasons=gin.reasons,
+                              answer="", hits=[], remember=False)
                 get_client().set_current_trace_io(input=req.question, output=REFUSAL_INPUT)
                 return {"answer": REFUSAL_INPUT, "hits": [], "tool_call": None,
                         "blocked": True, "guard": gin.reasons}
@@ -113,22 +139,11 @@ def chat(req: ChatReq, principal: Principal = Depends(require_principal)):
             else:
                 answer = gout.text
 
-        # governance: audit every turn; multi-turn: persist the exchange
-        tool_name = (state.get("tool_call") or {}).get("name")
-        db.write_audit(tenant_id=tenant, session_id=req.session_id,
-                       question=redact_pii(req.question),
-                       decision=decision, tool_call=tool_name, guard=guard_reasons,
-                       answer=answer)
-        if req.session_id:
-            db.append_turn(req.session_id, "user", req.question)
-            db.append_turn(req.session_id, "assistant", answer)
-
-        # ops: sample a fraction of live traffic for offline scoring
-        hit_ids = [h.get("chunk_id") for h in state.get("hits", [])]
-        if should_sample(req.session_id or req.question, s.online_sample_rate):
-            db.capture_sample(tenant_id=tenant, session_id=req.session_id,
-                              question=redact_pii(req.question),
-                              answer=answer, hit_ids=hit_ids)
+        # governance + multi-turn + ops sampling, shared with the streaming path
+        _persist_turn(tenant=tenant, req=req, decision=decision,
+                      tool_name=(state.get("tool_call") or {}).get("name"),
+                      guard_reasons=guard_reasons, answer=answer,
+                      hits=state.get("hits", []))
 
         get_client().set_current_trace_io(input=req.question, output=answer)
         get_client().update_current_span(input=req.question, output=answer)
