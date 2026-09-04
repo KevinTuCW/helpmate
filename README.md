@@ -27,6 +27,7 @@ helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线
 - [🧱 技术栈](#-技术栈)
 - [🚀 快速开始](#-快速开始)
 - [💬 使用示例](#-使用示例)
+- [🖥️ 客服挂件接口](#️-客服挂件接口)
 - [📊 评测](#-评测)
 - [🔭 可观测](#-可观测)
 - [📁 项目结构](#-项目结构)
@@ -140,6 +141,50 @@ curl -X POST localhost:8000/chat -H 'X-API-Key: sk-dji-alice' \
 { "answer": "没有查到订单 A1002 的信息。",
   "tool_call": { "name": "query_order", "args": { "order_id": "A1002" } } }
 ```
+
+## 🖥️ 客服挂件接口
+
+`/chat` 之外还有一条**流式**通道和三个**推荐问题**接口，供 `web/widget/` 的客服挂件消费。`/chat` 行为不变，两条路径共用同一张编译好的 LangGraph 图。
+
+### `POST /chat/stream`（SSE）
+
+入参与 `/chat` 相同（`question` + 可选 `session_id`）。事件序列：
+
+| event | data | 说明 |
+|---|---|---|
+| `stage` | `{"stage":"route"｜"retrieve"｜"retrieved"｜"act"｜"generate"}` | 节点**开工前**推送，是真实进度而非定时动画；`retrieved` 额外带 `count` |
+| `token` | `{"text":"…"}` | 答案增量。按**句子边界**成块吐出，不是逐字符 —— 见下 |
+| `replace` | `{"text":"…"}` | 输出护栏终检判定拦截，客户端须把整条消息替换为此文案 |
+| `done` | `{"hits":[…],"tool_call":…,"guard":…}` | `hits` 只含 `{n,title,section,url}`，**不含正文** |
+| `error` | `{"message":"stream failed"}` | 上游失败；已吐出的文字保留 |
+
+**为什么是逐句而不是逐字**：`check_output` 要看到完整答案才能判定，而流式没有「完整答案」直到结束。所以文本先缓冲到句子边界、脱敏后放行，结束时再对全文终检。终检来得太晚，已经显示的内容收不回去，于是拦截表现为「替换」（`replace`）而不是「阻止」。
+
+**为什么审计不会漏**：整轮对话跑在一个无 `yield` 的工作函数里，`finally` 里统一写审计、落多轮、采样 —— 正常结束、护栏拦截、上游失败、客户端中途断开，四条出口都会经过它。
+
+### 推荐问题
+
+```bash
+curl localhost:8000/suggest/hot                              # 开场热门，一次 SQL
+curl -G localhost:8000/suggest/match --data-urlencode 'q=限飞' # 输入联想，一次 SQL
+curl -X POST localhost:8000/suggest/followups \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"限飞区怎么解禁","answer":"需要提交申请。","hit_titles":["限飞政策"]}'
+```
+
+前两个读同一个**问题库**：手写种子 + 本租户 `audit_log` 里的历史提问（写入时已脱敏），用 `ILIKE` 子串匹配。**没有走全文检索**，因为 `content_tsv` 用的是 `to_tsvector('simple', …)`，Postgres 默认分词器不切中文 —— 整句会塌成一个 token，查不出东西。`followups` 走小模型（Qwen3-8B）一次调用，在答案渲染完之后异步请求，不占等待时间。
+
+三个接口都是**增强功能**：任何一个失败都静默返回空列表，绝不影响对话。
+
+### 嵌入
+
+```html
+<script type="module" src="/widget/index.js" data-api="/" data-api-key="sk-dji-alice"></script>
+```
+
+`data-api-key` 只适用于本地 demo —— 密钥写在页面上等于公开。生产应由服务端下发短期 token，本仓不实现。未配 `API_KEYS` 时走 dev 模式，`clone && run` 即可。
+
+会话语义：`session_id` 存 `localStorage`，刷新后上下文仍在（后端记着 `session_turns`，所以「那它续航呢」依然能指代）；但**对话内容不落浏览器存储**，刷新后面板是空的。挂件顶栏的「⋯」换新 `session_id`。
 
 ## 📊 评测
 
