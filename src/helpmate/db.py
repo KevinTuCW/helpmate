@@ -178,6 +178,49 @@ def write_audit(*, tenant_id: str, session_id: Optional[str], question: str,
         )
 
 
+# --- suggestions: the question bank ------------------------------------------
+# Opening "hot" questions and typeahead both read the audit trail. Its `question`
+# column is already PII-redacted on write, so replaying these back to a user
+# leaks nothing — but they are still tenant-scoped data, hence the filter.
+
+def top_questions(tenant_id: str, days: int = 7, limit: int = 4) -> list[str]:
+    """Most-asked questions for one tenant in the last `days` days."""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT question, count(*) AS n FROM audit_log "
+            "WHERE tenant_id = %s "
+            "AND created_at > now() - make_interval(days => %s) "
+            "AND decision IN ('retrieve', 'act') "
+            "AND char_length(question) BETWEEN 4 AND 40 "
+            "GROUP BY question ORDER BY n DESC, max(created_at) DESC LIMIT %s",
+            (tenant_id, days, limit),
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
+def _like_escape(s: str) -> str:
+    """Escape LIKE wildcards so user input matches literally."""
+    return s.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+
+
+def search_questions(prefix: str, tenant_id: str, limit: int = 5) -> list[str]:
+    """Distinct past questions of this tenant containing `prefix`.
+
+    Substring (not prefix) matching on purpose: Chinese users type the middle of
+    a phrase as often as the start ("解禁" should find "限飞区怎么解禁").
+    """
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT question FROM audit_log "
+            "WHERE tenant_id = %s AND question ILIKE %s "
+            "AND decision IN ('retrieve', 'act') "
+            "AND char_length(question) BETWEEN 4 AND 40 "
+            "ORDER BY question LIMIT %s",
+            (tenant_id, f"%{_like_escape(prefix)}%", limit),
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
 # --- multi-turn: session memory ----------------------------------------------
 
 def append_turn(session_id: str, role: str, content: str) -> None:
