@@ -24,7 +24,9 @@ const HERE = new URL('.', import.meta.url);
 
 const MOBILE = () => window.matchMedia('(max-width: 767px)').matches;
 const DISMISSED = 'helpmate.dismissed';
-const GREETING = '您好 👋 我是大疆客服助手，可以问我产品、售后和订单相关的问题。';
+// Names the assistant but keeps the answerable domain explicit — the knowledge
+// base is DJI's, and a greeting that hides that invites questions it cannot answer.
+const GREETING = '您好 👋 我是 Helpmate 客服助手，可以问我大疆产品、售后和订单相关的问题。';
 
 const ICON = '<svg viewBox="0 0 24 24"><path d="M12 3C6.9 3 3 6.6 3 11c0 2.3 1.1 4.3 2.9 5.7L5 21l4.4-2.2c.8.2 1.7.3 2.6.3 5.1 0 9-3.6 9-8s-3.9-8-9-8z"/></svg>';
 
