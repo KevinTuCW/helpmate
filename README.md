@@ -20,6 +20,12 @@
 
 helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线是知识问答</strong>：以 **DJI 大疆公开中文文档**（用户手册 / FAQ / 售后政策）为知识库，用**混合检索 + 重排**把问题答准并给出引用。<strong>Function Calling 是辅助</strong>，只为「查订单、查物流」这类少数实时问题补一条旁路，绝大多数问题走问答主路径。全流程在 **Langfuse** 可观测，并配一套**人工校验 golden set + 评测门禁**。它不是 demo —— 语料是真的，检索是混合的，指标是量化的。
 
+<p align="center">
+  <img src="docs/img/helpmate-widget.webp" alt="helpmate 客服挂件运行界面：答案带 [n] 角标引用、可展开「已参考 4 篇文档」、答完给三条追问推荐" width="900">
+</p>
+
+<p align="center"><sub>挂件跑在演示宿主页上：答案逐句挂 <code>[n]</code> 引用，底下折叠「已参考 4 篇文档」可展开原文，答完再给三条追问推荐。挂件不抢焦点、不改宿主页样式。</sub></p>
+
 ## 📑 目录
 
 - [✨ 特性](#-特性)
