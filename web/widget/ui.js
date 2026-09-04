@@ -42,14 +42,28 @@ export function createUI(panel, { onSend }) {
     acItems.forEach((n, k) => n.classList.toggle('on', k === i));
   };
 
+  function resetComposer() {
+    ta.value = '';
+    ta.style.height = 'auto';
+    // Assigning `value` fires no input event, so the button state is set here.
+    send.disabled = true;
+  }
+
   function submit() {
     closeAc();
     const q = ta.value.trim();
     if (!q || send.disabled) return;
-    ta.value = '';
-    ta.style.height = 'auto';
-    send.disabled = true;
+    resetComposer();
     onSend(q);
+  }
+
+  // Sending a suggestion clears the composer too. Without this the half-typed
+  // fragment that produced the suggestion stays behind, and the user has to
+  // delete it before asking anything else.
+  function pick(q, onPick) {
+    closeAc();
+    resetComposer();
+    onPick(q);
   }
 
   ta.addEventListener('input', () => {
@@ -92,7 +106,7 @@ export function createUI(panel, { onSend }) {
       const box = el('div', 'hot');
       for (const q of questions) {
         const b = el('button', null, q);
-        b.addEventListener('click', () => onPick(q));
+        b.addEventListener('click', () => pick(q, onPick));
         box.appendChild(b);
       }
       wrap.appendChild(box);
@@ -193,7 +207,7 @@ export function createUI(panel, { onSend }) {
       const box = el('div', 'chips');
       for (const q of questions) {
         const b = el('button', null, q);
-        b.addEventListener('click', () => onPick(q));
+        b.addEventListener('click', () => pick(q, onPick));
         box.appendChild(b);
       }
       bd.appendChild(box);
@@ -221,7 +235,7 @@ export function createUI(panel, { onSend }) {
         } else {
           row.append(q.slice(0, at), el('b', null, prefix), q.slice(at + prefix.length));
         }
-        row.addEventListener('click', () => { closeAc(); onPick(q); });
+        row.addEventListener('click', () => pick(q, onPick));
         ac.appendChild(row);
         acItems.push(row);
       }

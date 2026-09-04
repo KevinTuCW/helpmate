@@ -85,8 +85,20 @@ function close() {
 
 let hotBox = null;
 let lastQuestion = null;
+let acTimer = null;
+let acAbort = null;
+
+function cancelTypeahead() {
+  clearTimeout(acTimer);
+  acAbort?.abort();
+  acAbort = null;
+}
 
 async function ask(question) {
+  // Clearing the composer fires no input event, so the debounce timer from the
+  // last keystroke is still armed — without this it fires after the pick and
+  // reopens the suggestion list over a conversation that has already moved on.
+  cancelTypeahead();
   lastQuestion = question;
   hotBox?.remove();
   hotBox = null;
@@ -131,11 +143,8 @@ api.hot()
 // Typeahead: debounced, and every in-flight request is aborted when the next
 // keystroke arrives — otherwise a slow early response lands after a fast later
 // one and overwrites the list with stale matches.
-let acTimer = null;
-let acAbort = null;
 view.onInput((value) => {
-  clearTimeout(acTimer);
-  acAbort?.abort();
+  cancelTypeahead();
   if (value.length < 2) { view.hideTypeahead(); return; }
   acTimer = setTimeout(() => {
     acAbort = new AbortController();
