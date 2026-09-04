@@ -8,6 +8,7 @@ cheap and explainable rather than a second thinking-model call.
 """
 import re
 from dataclasses import dataclass, field
+from typing import Optional
 
 REFUSAL_INPUT = "抱歉，这个请求我无法处理。我只能回答与产品知识库和你自己的订单/物流相关的问题。"
 REFUSAL_OUTPUT = "抱歉，我这次无法给出合规的回答，请换个问法或联系人工客服。"
@@ -119,3 +120,62 @@ def check_output(text: str) -> GuardResult:
             reasons.append("secret_leak")
             sanitized = p.sub("***", sanitized)
     return GuardResult(allowed=True, reasons=reasons, text=sanitized)
+
+
+# --- output: the streaming variant -------------------------------------------
+_SENTENCE_END = re.compile(r"[。！？!?\n]")
+
+
+class StreamGuard:
+    """Guards an answer that is being streamed token by token.
+
+    Text is held until a sentence boundary, redacted, then released. The real
+    `check_output` verdict only exists once the answer is complete, so a hard
+    block surfaces from `finish()` and the transport replaces what was shown.
+
+    Known residual risk: a secret straddling a flush boundary could be released
+    in fragments. In practice secrets contain no 。！？ so a sentence-boundary
+    flush cannot split one; `finish()` re-checks the full text either way, so the
+    audit trail still records `secret_leak` even in that case.
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._sent = ""
+        self.reasons: list[str] = []
+
+    def feed(self, delta: str) -> Optional[str]:
+        """Buffer a token. Returns text to emit once at least one sentence closed."""
+        self._buf += delta
+        last = None
+        for last in _SENTENCE_END.finditer(self._buf):
+            pass
+        if last is None:
+            return None
+        cut = last.end()
+        chunk, self._buf = self._buf[:cut], self._buf[cut:]
+        return self._release(chunk)
+
+    def finish(self) -> tuple[str, GuardResult]:
+        """Flush the tail and rule on the whole answer.
+
+        Returns `(tail_to_emit, verdict)`. When `verdict.blocked`, the client must
+        replace everything already shown with `verdict.text`.
+        """
+        tail = self._release(self._buf) if self._buf else ""
+        self._buf = ""
+        verdict = check_output(self._sent)
+        if verdict.blocked:
+            return tail, GuardResult(allowed=False, reasons=verdict.reasons,
+                                     text=REFUSAL_OUTPUT)
+        reasons = list(dict.fromkeys(self.reasons + verdict.reasons))
+        return tail, GuardResult(allowed=True, reasons=reasons, text=self._sent)
+
+    def _release(self, chunk: str) -> str:
+        for p in _SECRET:
+            if p.search(chunk):
+                if "secret_leak" not in self.reasons:
+                    self.reasons.append("secret_leak")
+                chunk = p.sub("***", chunk)
+        self._sent += chunk
+        return chunk

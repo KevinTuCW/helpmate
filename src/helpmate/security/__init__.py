@@ -1,5 +1,6 @@
 from helpmate.security.guardrails import (
     GuardResult,
+    StreamGuard,
     check_input,
     check_output,
     redact_pii,
@@ -9,6 +10,7 @@ from helpmate.security.guardrails import (
 
 __all__ = [
     "GuardResult",
+    "StreamGuard",
     "check_input",
     "check_output",
     "redact_pii",

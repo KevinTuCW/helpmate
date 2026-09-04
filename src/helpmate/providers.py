@@ -86,6 +86,39 @@ class OpenAILLM:
         )
         return r.choices[0].message.content or ""
 
+    def complete_small(self, prompt: str) -> str:
+        """One-shot completion on the small routing model.
+
+        Reused for cheap side tasks (follow-up suggestions) so they never queue
+        behind — or pay for — the thinking answer model.
+        """
+        extra = {"enable_thinking": False} if self._router_provider == "siliconflow" else None
+        r = self._router.chat.completions.create(
+            model=self._router_model,
+            messages=[{"role": "user", "content": prompt}],
+            extra_body=extra,
+            name="suggest-followups",
+        )
+        return r.choices[0].message.content or ""
+
+    def complete_stream(self, prompt: str):
+        """Yield answer deltas from the answer model.
+
+        Only `delta.content` is yielded. glm-4.7 thinks by default and puts the
+        chain of thought in `delta.reasoning_content`; streaming that to a
+        customer would show them the model's scratchpad.
+        """
+        stream = self._c.chat.completions.create(
+            model=self._model, messages=[{"role": "user", "content": prompt}],
+            stream=True, name="generate-answer-stream",
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            text = getattr(chunk.choices[0].delta, "content", None)
+            if text:
+                yield text
+
     def select_tool(self, question: str, schemas: list[dict]) -> Optional[dict]:
         # Qwen3 is a hybrid-reasoning model and thinks by default; for a two-way
         # branch that only buys latency, so turn it off. The flag is a SiliconFlow

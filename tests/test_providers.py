@@ -1,5 +1,6 @@
 import math
 import types
+from types import SimpleNamespace
 import helpmate.providers as providers
 from helpmate.config import get_settings
 from helpmate.providers import LocalHashingEmbedder, OpenAILLM
@@ -89,3 +90,38 @@ def test_local_embedder_overlap_beats_disjoint():
     related = e.embed("our refund policy allows returns")
     unrelated = e.embed("cats sleep fifteen hours")
     assert _cos(q, related) > _cos(q, unrelated)
+
+
+# --- streaming ---------------------------------------------------------------
+# glm-4.7 runs with thinking on, so a streamed chunk carries the chain of thought
+# in `delta.reasoning_content` and the answer in `delta.content`. Yielding the
+# former would print the model's scratchpad into the customer's chat window.
+
+def _chunk(content=None, reasoning=None):
+    delta = SimpleNamespace(content=content, reasoning_content=reasoning)
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
+
+class _FakeCompletions:
+    def __init__(self, chunks):
+        self._chunks = chunks
+        self.kwargs = None
+
+    def create(self, **kwargs):
+        self.kwargs = kwargs
+        return iter(self._chunks)
+
+
+def test_complete_stream_yields_content_and_ignores_reasoning():
+    llm = OpenAILLM.__new__(OpenAILLM)          # skip __init__: no network, no settings
+    fake = _FakeCompletions([
+        _chunk(reasoning="让我想想…"),
+        _chunk(content="图传距离"),
+        _chunk(content="约 20 km。"),
+        SimpleNamespace(choices=[]),            # provider keep-alive chunk
+    ])
+    llm._c = SimpleNamespace(chat=SimpleNamespace(completions=fake))
+    llm._model = "glm-4.7"
+
+    assert list(llm.complete_stream("prompt")) == ["图传距离", "约 20 km。"]
+    assert fake.kwargs["stream"] is True
