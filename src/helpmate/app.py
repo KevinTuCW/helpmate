@@ -1,6 +1,11 @@
 import helpmate.obs  # noqa: F401  -- initializes Langfuse before any OpenAI client
+import asyncio
+import json
+import logging
+import queue
 from fastapi import Depends, FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
 from typing import Optional
@@ -15,13 +20,15 @@ from helpmate.retrieve.embed import get_embedder
 from helpmate.retrieve.hybrid import hybrid_retrieve
 from helpmate.ingest.pipeline import ingest_source
 from helpmate.graph import build_graph
-from helpmate.security import (check_input, check_output, redact_pii,
+from helpmate.security import (check_input, check_output, redact_pii, StreamGuard,
                                REFUSAL_INPUT, REFUSAL_OUTPUT)
 from helpmate.session import rewrite_query
 from helpmate.ops import should_sample
+from helpmate.suggest import followups, hot_questions, match_questions
 
 app = FastAPI(title="helpmate")
 WEB = Path(__file__).resolve().parents[2] / "web"
+log = logging.getLogger(__name__)
 
 
 class IngestReq(BaseModel):
@@ -35,6 +42,30 @@ class ChatReq(BaseModel):
     session_id: str | None = None
     # No tenant_id here on purpose: identity comes from the credential, never
     # from the request body. A caller must not be able to name its own tenant.
+
+
+class FollowupReq(BaseModel):
+    question: str
+    answer: str
+    hit_titles: list[str] = []
+    session_id: str | None = None
+
+
+def _sse(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _cite_meta(hits: list[dict]) -> list[dict]:
+    """Citation metadata for the UI: titles and links, never the chunk text.
+
+    `/chat` hands the browser whole chunks; a widget embedded on a public page
+    has no business receiving the corpus verbatim.
+    """
+    return [{"n": i + 1,
+             "title": h.get("doc_title") or h.get("section_title") or "",
+             "section": h.get("section_title") or "",
+             "url": h.get("source_url") or ""}
+            for i, h in enumerate(hits)]
 
 
 @app.post("/ingest")
@@ -149,6 +180,167 @@ def chat(req: ChatReq, principal: Principal = Depends(require_principal)):
         get_client().update_current_span(input=req.question, output=answer)
     return {"answer": answer, "hits": state.get("hits", []),
             "tool_call": state.get("tool_call"), "guard": guard_reasons or None}
+
+
+def _produce_turn(req: ChatReq, principal: Principal, out: queue.Queue) -> None:
+    """Run one streamed turn to completion, pushing SSE frames into `out`.
+
+    Deliberately *not* a generator. Langfuse spans ride on OpenTelemetry's
+    context, which lives in a contextvar; Starlette drives a sync generator with
+    one threadpool hop per `next()`, so a `with` block wrapped around a `yield`
+    is entered and exited against different copies of that context — the span
+    detaches wrongly and the streamed turn loses its trace nesting. Keeping every
+    suspension point out of this function fixes that: it runs start to finish on
+    one thread, and the async side below only ferries finished frames.
+
+    Every exit path — normal end, guardrail block, upstream failure, client
+    hangup — goes through the `finally`, so the audit row is written exactly once
+    and the reader is always released by the sentinel.
+    """
+    s = get_settings()
+    tenant = principal.tenant_id
+    acc = {"decision": "retrieve", "tool": None, "hits": [], "guard": [],
+           "answer": "", "remember": True, "persisted": False}
+
+    def persist():
+        if acc["persisted"]:
+            return
+        acc["persisted"] = True
+        _persist_turn(tenant=tenant, req=req, decision=acc["decision"],
+                      tool_name=acc["tool"], guard_reasons=acc["guard"],
+                      answer=acc["answer"], hits=acc["hits"],
+                      remember=acc["remember"])
+
+    try:
+        attrs = {"tags": ["chat", "stream"]}
+        if req.session_id:
+            attrs["session_id"] = req.session_id
+        with propagate_attributes(**attrs), \
+                get_client().start_as_current_observation(name="chat-stream-response"):
+            get_client().set_current_trace_io(input=req.question)
+
+            # input guardrail — refuse before any model call, same as /chat
+            if s.guardrails_enabled:
+                gin = check_input(req.question)
+                if gin.blocked:
+                    acc.update(decision="blocked_input", guard=gin.reasons,
+                               answer=REFUSAL_INPUT, remember=False)
+                    out.put(_sse("token", {"text": REFUSAL_INPUT}))
+                    out.put(_sse("done", {"hits": [], "tool_call": None,
+                                          "guard": gin.reasons}))
+                    get_client().set_current_trace_io(input=req.question,
+                                                      output=REFUSAL_INPUT)
+                    return
+
+            history = (db.recent_turns(req.session_id, s.session_history_turns)
+                       if req.session_id else [])
+            runner = build_graph(
+                retriever=lambda q: hybrid_retrieve(q, tenant_id=tenant),
+                # Order lookups stay bound to the authenticated principal here
+                # too — the streaming path is the same data path.
+                tool_dispatch=lambda name, args: dispatch_tool(
+                    name, args,
+                    get_order=lambda oid: db.get_order(
+                        oid, tenant_id=principal.tenant_id,
+                        customer_id=principal.customer_id),
+                    get_shipment=lambda oid: db.get_shipment(
+                        oid, tenant_id=principal.tenant_id,
+                        customer_id=principal.customer_id),
+                ),
+                llm=OpenAILLM(),
+            )
+            guard = StreamGuard()
+            for ev in runner.stream(
+                    req.question,
+                    retrieval_query=rewrite_query(req.question, history)):
+                if "stage" in ev:
+                    out.put(_sse("stage", {"stage": ev["stage"]}))
+                elif "hits" in ev:
+                    acc["hits"] = ev["hits"]
+                    out.put(_sse("stage", {"stage": "retrieved",
+                                           "count": len(ev["hits"])}))
+                elif "token" in ev:
+                    text = (guard.feed(ev["token"]) if s.guardrails_enabled
+                            else ev["token"])
+                    if text:
+                        out.put(_sse("token", {"text": text}))
+                elif "state" in ev:
+                    tool_call = ev["state"].get("tool_call")
+                    acc["tool"] = (tool_call or {}).get("name")
+                    acc["decision"] = "act" if tool_call else "retrieve"
+                    acc["answer"] = ev["state"].get("answer", "")
+
+            if s.guardrails_enabled:
+                tail, verdict = guard.finish()
+                if tail:
+                    out.put(_sse("token", {"text": tail}))
+                acc["guard"] = verdict.reasons
+                acc["answer"] = verdict.text
+                if verdict.blocked:
+                    acc["decision"] = "blocked_output"
+                    out.put(_sse("replace", {"text": verdict.text}))
+
+            out.put(_sse("done", {"hits": _cite_meta(acc["hits"]),
+                                  "tool_call": acc["tool"],
+                                  "guard": acc["guard"] or None}))
+            get_client().set_current_trace_io(input=req.question,
+                                              output=acc["answer"])
+    except Exception:
+        out.put(_sse("error", {"message": "stream failed"}))
+    finally:
+        try:
+            persist()
+        except Exception:
+            # The answer is already delivered; failing the response now helps
+            # nobody. But a silently lost audit row is exactly the governance
+            # gap this layer exists to prevent, so it goes to the log loudly.
+            log.exception("persisting a streamed turn failed")
+        finally:
+            # Own finally: the reader blocks on get() until this arrives, so a
+            # dead database must not turn into a hung request.
+            out.put(None)
+
+
+async def _chat_events(req: ChatReq, principal: Principal):
+    """Ferry frames from the worker thread to the client. No business logic here."""
+    out: queue.Queue = queue.Queue()
+    worker = asyncio.get_running_loop().run_in_executor(
+        None, _produce_turn, req, principal, out)
+    try:
+        while True:
+            frame = await asyncio.to_thread(out.get)
+            if frame is None:
+                break
+            yield frame
+    finally:
+        await worker          # surface a worker crash instead of swallowing it
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatReq, principal: Principal = Depends(require_principal)):
+    return StreamingResponse(
+        _chat_events(req, principal),
+        media_type="text/event-stream",
+        # Buffering proxies would hold the whole stream and defeat the point.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/suggest/hot")
+def suggest_hot(principal: Principal = Depends(require_principal)):
+    return {"questions": hot_questions(principal.tenant_id)}
+
+
+@app.get("/suggest/match")
+def suggest_match(q: str = "", principal: Principal = Depends(require_principal)):
+    return {"questions": match_questions(q, principal.tenant_id)}
+
+
+@app.post("/suggest/followups")
+def suggest_followups(req: FollowupReq,
+                      principal: Principal = Depends(require_principal)):
+    return {"questions": followups(req.question, req.answer, req.hit_titles,
+                                   OpenAILLM())}
 
 
 @app.get("/")
