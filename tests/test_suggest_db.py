@@ -11,11 +11,14 @@ class _FakeCursor:
     def __init__(self, rows, log):
         self._rows, self._log = rows, log
 
-    def execute(self, sql, params):
+    def execute(self, sql, params=None):
         self._log.append((" ".join(sql.split()), params))
 
     def fetchall(self):
         return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
 
     def __enter__(self):
         return self
@@ -98,3 +101,28 @@ def test_fts_search_segments_the_query_before_binding(monkeypatch):
     _, params = log[0]
     assert segment_query("解禁") in params
     assert "解禁" not in params        # the raw term would match nothing
+
+
+# --- startup datasource line -------------------------------------------------
+# An exported DATABASE_URL from a sibling project silently overrides .env
+# (pydantic-settings ranks env vars above the file) and the app then talks to
+# someone else's database perfectly happily. Printing which one it actually
+# reached is the cheapest way to make that visible.
+
+def test_describe_names_the_database_and_server(monkeypatch):
+    _patch_conn(monkeypatch, [("helpmate", "PostgreSQL 16.14 (Homebrew) on x86_64")])
+    out = db.describe()
+    assert "helpmate" in out
+    assert "PostgreSQL 16.14 (Homebrew)" in out
+    assert "on x86_64" not in out          # the build triple is noise in a log line
+
+
+def test_describe_never_leaks_credentials(monkeypatch):
+    class _S:
+        database_url = "postgresql://nexus:hunter2@db.example:5432/nexus"
+
+    monkeypatch.setattr(db, "get_settings", lambda: _S())
+    _patch_conn(monkeypatch, [("nexus", "PostgreSQL 16.14 on x86_64")])
+    out = db.describe()
+    assert "hunter2" not in out
+    assert "db.example:5432" in out

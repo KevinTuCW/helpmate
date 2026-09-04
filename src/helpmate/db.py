@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import psycopg
 from contextlib import contextmanager
 from typing import Optional
@@ -37,6 +38,25 @@ def _conn():
         return
     with pool.connection() as conn:
         yield conn
+
+
+def describe() -> str:
+    """`db@host:port · PostgreSQL x.y` for the connection actually in use.
+
+    Worth logging at startup: an exported `DATABASE_URL` from another project
+    silently overrides `.env` (pydantic-settings ranks env vars above the file),
+    and the app will then talk to that project's database perfectly happily. The
+    only symptom is a query failing on a table that exists only here, which
+    reads like a missing migration rather than a wrong server.
+
+    Credentials are stripped — this string goes into logs.
+    """
+    dsn = re.sub(r"//[^/@]*@", "//", get_settings().database_url)
+    where = dsn.rsplit("/", 1)[0].split("//", 1)[-1]
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("SELECT current_database(), version()")
+        name, version = cur.fetchone()
+    return f"{name}@{where} · {version.split(' on ')[0]}"
 
 
 def insert_document(source_url: str, title: str, doc_type: str,

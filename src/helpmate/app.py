@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import queue
+from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,9 +27,31 @@ from helpmate.session import rewrite_query
 from helpmate.ops import should_sample
 from helpmate.suggest import followups, hot_questions, match_questions
 
-app = FastAPI(title="helpmate")
 WEB = Path(__file__).resolve().parents[2] / "web"
 log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Name the database on the first line of the log.
+
+    Not a gate — the app still starts if this fails. It exists because the wrong
+    database is invisible: an exported DATABASE_URL from another project
+    outranks `.env`, and every query then fails on a table that "should" be
+    there. Seeing `nexus@localhost:5432` where `helpmate@…` was expected turns
+    twenty minutes of debugging into one glance.
+    """
+    # uvicorn.error is the logger uvicorn configures at INFO; ours would be
+    # filtered out by the root logger's default WARNING level.
+    try:
+        logging.getLogger("uvicorn.error").info("database: %s", db.describe())
+    except Exception as exc:
+        logging.getLogger("uvicorn.error").warning(
+            "database: unreachable (%s)", exc.__class__.__name__)
+    yield
+
+
+app = FastAPI(title="helpmate", lifespan=lifespan)
 
 
 class IngestReq(BaseModel):
