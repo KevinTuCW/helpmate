@@ -50,7 +50,7 @@ function mount() {
   panel.innerHTML = `
     <div class="hd">
       <button class="back" aria-label="返回">‹</button>
-      <b>大疆智能客服</b>
+      <b>Helpmate智能客服</b>
       <button class="reset" title="结束会话">⋯</button>
       <button class="close" aria-label="关闭">✕</button>
     </div>
