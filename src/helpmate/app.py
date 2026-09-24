@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import queue
+import re
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -31,6 +32,12 @@ from helpmate.suggest import followups, hot_questions, match_questions
 
 WEB = Path(__file__).resolve().parents[2] / "web"
 log = logging.getLogger(__name__)
+
+_RETURN_INTENT = re.compile(
+    r"\b(return|refund|exchange|replacement|damaged|defective|after[- ]sales)\b"
+    r"|退货|退款|换货|换码|售后|破损|损坏",
+    re.IGNORECASE,
+)
 
 
 @asynccontextmanager
@@ -110,6 +117,12 @@ def _plugin_wiring(principal: Principal, req: "ChatReq"):
             row = None
         if row and row["plugin"] in by_name:
             forced, ext = row["plugin"], row["ext_session_id"]
+
+    # Explicit after-sales intent is a deterministic fast path. Asking the
+    # general router to choose between order lookup and Return Saver made the
+    # same customer wording route differently, especially under model limits.
+    if not forced and "return_saver" in by_name and _RETURN_INTENT.search(req.question):
+        forced = "return_saver"
 
     def delegate(name: str, args: dict):
         plugin = by_name[name]

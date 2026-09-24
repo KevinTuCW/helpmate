@@ -127,4 +127,7 @@ def _is_escape(question: str) -> bool:
 
 
 def _default_post(url: str, *, json: dict, headers: dict, timeout: float):
-    return httpx.post(url, json=json, headers=headers, timeout=timeout)
+    # Service-to-service plugin calls must not inherit a desktop HTTP proxy.
+    # A proxy can turn a healthy localhost Return Saver into an opaque 503.
+    with httpx.Client(trust_env=False) as client:
+        return client.post(url, json=json, headers=headers, timeout=timeout)
