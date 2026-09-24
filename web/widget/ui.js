@@ -6,8 +6,74 @@ const STAGE_TEXT = {
   retrieve: '正在检索知识库…',
   retrieved: '已找到相关文档，正在整理…',
   act: '正在查询订单…',
+  delegate: '正在处理售后方案…',
   generate: '正在组织回答…',
 };
+
+export function renderOffer(mount, payload, { onAccept, onDecline }) {
+  const sourceText = `${payload.offer.label || ''} ${payload.escape_hatch || ''}`;
+  const english = !/[\u3400-\u9fff]/.test(sourceText) && /[A-Za-z]/.test(sourceText);
+  const copy = english ? {
+    fallback: 'Available option', accept: 'Accept', decline: 'I still want to return it',
+    processing: 'Processing…', accepted: 'Accepted', expired: 'Offer expired', currency: '$',
+  } : {
+    fallback: '为你准备的方案', accept: '接受', decline: '还是要退',
+    processing: '处理中…', accepted: '已受理', expired: '方案已失效', currency: '¥',
+  };
+  const card = document.createElement('div');
+  card.className = 'offer-card';
+
+  const label = document.createElement('div');
+  label.className = 'offer-label';
+  label.textContent = payload.offer.label || copy.fallback;
+
+  const value = document.createElement('div');
+  value.className = 'offer-value';
+  value.textContent = `${copy.currency}${Number(payload.offer.value).toFixed(2)}`;
+
+  const row = document.createElement('div');
+  row.className = 'offer-actions';
+  const accept = document.createElement('button');
+  accept.className = 'offer-accept';
+  accept.textContent = copy.accept;
+  const decline = document.createElement('button');
+  decline.className = 'offer-decline';
+  decline.textContent = copy.decline;
+
+  const idem = crypto.randomUUID();
+
+  accept.addEventListener('click', async () => {
+    accept.disabled = true;
+    decline.disabled = true;
+    accept.textContent = copy.processing;
+    const r = await onAccept({
+      offer_token: payload.offer.offer_token,
+      idempotency_key: idem,
+    });
+    if (r.ok || r.data.status === 'already_executed') {
+      card.classList.add('offer-done');
+      accept.textContent = copy.accepted;
+    } else {
+      accept.textContent = copy.expired;
+      decline.disabled = false;
+    }
+  });
+  decline.addEventListener('click', () => {
+    accept.disabled = true;
+    decline.disabled = true;
+    onDecline(copy.decline);
+  });
+
+  row.append(accept, decline);
+
+  const escape = document.createElement('div');
+  escape.className = 'offer-escape';
+  escape.textContent = payload.escape_hatch || '';
+
+  card.append(label, value, row, escape);
+  mount.append(card);
+  return card;
+}
 
 export function createUI(panel, { onSend }) {
   const bd = panel.querySelector('.bd');
@@ -221,6 +287,12 @@ export function createUI(panel, { onSend }) {
       line.appendChild(btn);
       bd.appendChild(line);
       scroll();
+    },
+
+    showOffer(payload, handlers) {
+      const card = renderOffer(bd, payload, handlers);
+      scroll();
+      return card;
     },
 
     showTypeahead(questions, prefix, onPick) {

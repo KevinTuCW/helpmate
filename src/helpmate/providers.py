@@ -10,9 +10,11 @@ from helpmate.config import get_settings
 # no tool" rule takes the golden-set routing score from 0.98 back to 1.00 and
 # shortens the reply, so the call also gets faster.
 ROUTER_SYSTEM = (
-    "Call a tool only when the user asks about a specific order and the message "
-    "contains an actual order id. Otherwise answer nothing and call no tool. "
-    "Never invent or guess an order id."
+    "Use negotiate_return whenever the user wants a return, refund, exchange, "
+    "or help with an after-sales complaint, even when no order id is present. "
+    "Use query_order or query_logistics only when the message contains an actual "
+    "order id and asks about that order or shipment. For other questions call no "
+    "tool. Never invent or guess an order id."
 )
 
 

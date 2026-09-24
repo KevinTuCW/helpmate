@@ -109,6 +109,10 @@ async function ask(question) {
       stage: (d) => view.setStage(d.stage),
       token: (d) => view.appendToken(d.text),
       replace: (d) => view.replaceAssistant(d.text),
+      offer: (p) => view.showOffer(p, {
+        onAccept: (body) => api.pluginAction(p.plugin, 'accept', body),
+        onDecline: (message) => ask(message),
+      }),
       done: (d) => {
         const answer = view.finishAssistant(d.hits || []);
         // Fired only after the answer is on screen, so it never adds to the wait.

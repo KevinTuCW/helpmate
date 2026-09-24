@@ -40,7 +40,15 @@ export function createApi({ base, apiKey }) {
       method: 'POST', body: JSON.stringify(body),
     }),
 
-    // handlers: { stage, token, replace, done, error } — each gets the parsed data.
+    async pluginAction(plugin, action, body) {
+      const r = await fetch(url(`plugin/${plugin}/${action}`), {
+        method: 'POST', headers, body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(() => ({}));
+      return { ok: r.ok, status: r.status, data };
+    },
+
+    // handlers: { stage, token, replace, offer, done, error } — each gets the parsed data.
     async chat(question, handlers, signal) {
       const res = await fetch(url('chat/stream'), {
         method: 'POST', headers, signal,

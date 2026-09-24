@@ -267,6 +267,39 @@ def recent_turns(session_id: str, limit: int = 6) -> list[dict]:
     return list(reversed(rows))
 
 
+# --- conversation plugin session bridge --------------------------------------
+
+def active_plugin_session(tenant_id: str, session_id: str) -> Optional[dict]:
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("""SELECT plugin, ext_session_id FROM plugin_sessions
+                       WHERE tenant_id=%s AND session_id=%s AND active
+                       ORDER BY id DESC LIMIT 1""", (tenant_id, session_id))
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {"plugin": row[0], "ext_session_id": row[1]}
+
+
+def open_plugin_session(tenant_id: str, session_id: str, plugin: str,
+                        ext_session_id: str) -> None:
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("""INSERT INTO plugin_sessions
+                         (tenant_id, session_id, plugin, ext_session_id)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (tenant_id, session_id, plugin) WHERE active
+                       DO UPDATE SET ext_session_id = EXCLUDED.ext_session_id""",
+                    (tenant_id, session_id, plugin, ext_session_id))
+
+
+def close_plugin_session(tenant_id: str, session_id: str, plugin: str) -> None:
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("""UPDATE plugin_sessions
+                       SET active=false, closed_at=now()
+                       WHERE tenant_id=%s AND session_id=%s AND plugin=%s
+                         AND active""",
+                    (tenant_id, session_id, plugin))
+
+
 # --- eval: stable golden-set anchors -----------------------------------------
 # `chunks.id` is a serial that changes on every re-ingest, so a golden set keyed
 # on it dies the moment chunking changes. Anchors key on content instead.

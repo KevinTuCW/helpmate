@@ -20,3 +20,13 @@ def test_widget_modules_are_mounted():
     for path in ("/widget/index.js", "/widget/api.js",
                  "/widget/ui.js", "/widget/style.css"):
         assert c.get(path).status_code == 200, path
+
+
+def test_offer_controls_support_english_conversations():
+    c = TestClient(app_mod.app)
+    ui = c.get("/widget/ui.js").text
+    index = c.get("/widget/index.js").text
+    assert "I still want to return it" in ui
+    assert "Processing…" in ui
+    assert "Accepted" in ui
+    assert "onDecline: (message) => ask(message)" in index

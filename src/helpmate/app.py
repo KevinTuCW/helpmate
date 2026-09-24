@@ -4,8 +4,8 @@ import json
 import logging
 import queue
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
@@ -25,6 +25,8 @@ from helpmate.security import (check_input, check_output, redact_pii, StreamGuar
                                REFUSAL_INPUT, REFUSAL_OUTPUT)
 from helpmate.session import rewrite_query
 from helpmate.ops import should_sample
+from helpmate.plugins import TurnContext
+from helpmate.plugins.registry import load_plugins
 from helpmate.suggest import followups, hot_questions, match_questions
 
 WEB = Path(__file__).resolve().parents[2] / "web"
@@ -89,6 +91,61 @@ def _cite_meta(hits: list[dict]) -> list[dict]:
              "section": h.get("section_title") or "",
              "url": h.get("source_url") or ""}
             for i, h in enumerate(hits)]
+
+
+def _plugin_wiring(principal: Principal, req: "ChatReq"):
+    """Plugins enabled for this turn, optional stickiness, and delegate callable."""
+    s = get_settings()
+    plugins = load_plugins(s, principal.tenant_id)
+    if not plugins:
+        return (), None, None, None
+
+    forced, ext = None, None
+    by_name = {p.name: p for p in plugins}
+    if req.session_id:
+        try:
+            row = db.active_plugin_session(principal.tenant_id, req.session_id)
+        except Exception:
+            log.exception("reading the plugin bridge failed")
+            row = None
+        if row and row["plugin"] in by_name:
+            forced, ext = row["plugin"], row["ext_session_id"]
+
+    def delegate(name: str, args: dict):
+        plugin = by_name[name]
+        return plugin.handle(TurnContext(
+            question=req.question, tenant_id=principal.tenant_id,
+            customer_id=principal.customer_id, session_id=req.session_id,
+            ext_session_id=ext, tool_args=args))
+
+    return plugins, forced, delegate, ext
+
+
+def _sync_bridge(principal: Principal, req: "ChatReq", reply) -> None:
+    """Persist opening/closing plugin stickiness without failing the delivered turn."""
+    if not req.session_id or reply is None or not reply.handled:
+        return
+    try:
+        if reply.closed:
+            db.close_plugin_session(principal.tenant_id, req.session_id,
+                                    reply.plugin_name)
+        elif reply.ext_session_id:
+            db.open_plugin_session(principal.tenant_id, req.session_id,
+                                   reply.plugin_name, reply.ext_session_id)
+    except Exception:
+        log.exception("updating the plugin bridge failed")
+
+
+def _guard_delegated(answer: str, reply):
+    """Run output guardrails in monitor mode for delegated text."""
+    s = get_settings()
+    if not s.guardrails_enabled:
+        return answer, reply.offer, [], f"delegate:{reply.plugin_name}"
+    gout = check_output(answer)
+    if gout.blocked:
+        return (reply.escape_hatch or REFUSAL_OUTPUT, None, gout.reasons,
+                "delegate_guard_suppressed")
+    return answer, reply.offer, gout.reasons, f"delegate:{reply.plugin_name}"
 
 
 @app.post("/ingest")
@@ -164,6 +221,7 @@ def chat(req: ChatReq, principal: Principal = Depends(require_principal)):
                    if req.session_id else [])
         retrieval_query = rewrite_query(req.question, history)
 
+        plugins, forced, delegate, _ext = _plugin_wiring(principal, req)
         run = build_graph(
             retriever=lambda q: hybrid_retrieve(q, tenant_id=tenant),
             # Order lookups are bound to the authenticated principal, so a
@@ -178,14 +236,26 @@ def chat(req: ChatReq, principal: Principal = Depends(require_principal)):
                     customer_id=principal.customer_id),
             ),
             llm=OpenAILLM(),
+            plugins=plugins,
+            delegate=delegate,
         )
-        state = run(req.question, retrieval_query=retrieval_query)
+        if forced:
+            state = run(req.question, retrieval_query=retrieval_query,
+                        forced_plugin=forced)
+        else:
+            state = run(req.question, retrieval_query=retrieval_query)
         answer = state["answer"]
+        reply = state.get("plugin_reply")
 
         # output guardrail — redact leaked secrets, hard-block disallowed content
         guard_reasons: list[str] = []
-        decision = "act" if state.get("tool_call") else "retrieve"
-        if s.guardrails_enabled:
+        offer = None
+        if reply is not None and reply.handled:
+            answer, offer, guard_reasons, decision = _guard_delegated(answer, reply)
+            _sync_bridge(principal, req, reply)
+        else:
+            decision = "act" if state.get("tool_call") else "retrieve"
+        if not (reply is not None and reply.handled) and s.guardrails_enabled:
             gout = check_output(answer)
             guard_reasons = gout.reasons
             if gout.blocked:
@@ -201,8 +271,13 @@ def chat(req: ChatReq, principal: Principal = Depends(require_principal)):
 
         get_client().set_current_trace_io(input=req.question, output=answer)
         get_client().update_current_span(input=req.question, output=answer)
-    return {"answer": answer, "hits": state.get("hits", []),
-            "tool_call": state.get("tool_call"), "guard": guard_reasons or None}
+    out = {"answer": answer, "hits": state.get("hits", []),
+           "tool_call": state.get("tool_call"), "guard": guard_reasons or None}
+    if reply is not None and reply.handled:
+        out.update(plugin=reply.plugin_name, offer=offer,
+                   escape_hatch=reply.escape_hatch,
+                   next_action=reply.next_action)
+    return out
 
 
 def _produce_turn(req: ChatReq, principal: Principal, out: queue.Queue) -> None:
@@ -223,7 +298,7 @@ def _produce_turn(req: ChatReq, principal: Principal, out: queue.Queue) -> None:
     s = get_settings()
     tenant = principal.tenant_id
     acc = {"decision": "retrieve", "tool": None, "hits": [], "guard": [],
-           "answer": "", "remember": True, "persisted": False}
+           "answer": "", "remember": True, "persisted": False, "reply": None}
 
     def persist():
         if acc["persisted"]:
@@ -257,6 +332,7 @@ def _produce_turn(req: ChatReq, principal: Principal, out: queue.Queue) -> None:
 
             history = (db.recent_turns(req.session_id, s.session_history_turns)
                        if req.session_id else [])
+            plugins, forced, delegate, _ext = _plugin_wiring(principal, req)
             runner = build_graph(
                 retriever=lambda q: hybrid_retrieve(q, tenant_id=tenant),
                 # Order lookups stay bound to the authenticated principal here
@@ -271,11 +347,16 @@ def _produce_turn(req: ChatReq, principal: Principal, out: queue.Queue) -> None:
                         customer_id=principal.customer_id),
                 ),
                 llm=OpenAILLM(),
+                plugins=plugins,
+                delegate=delegate,
             )
             guard = StreamGuard()
-            for ev in runner.stream(
+            stream = (runner.stream(
+                req.question, retrieval_query=rewrite_query(req.question, history),
+                forced_plugin=forced) if forced else runner.stream(
                     req.question,
-                    retrieval_query=rewrite_query(req.question, history)):
+                    retrieval_query=rewrite_query(req.question, history)))
+            for ev in stream:
                 if "stage" in ev:
                     out.put(_sse("stage", {"stage": ev["stage"]}))
                 elif "hits" in ev:
@@ -292,8 +373,21 @@ def _produce_turn(req: ChatReq, principal: Principal, out: queue.Queue) -> None:
                     acc["tool"] = (tool_call or {}).get("name")
                     acc["decision"] = "act" if tool_call else "retrieve"
                     acc["answer"] = ev["state"].get("answer", "")
+                    acc["reply"] = ev["state"].get("plugin_reply")
 
-            if s.guardrails_enabled:
+            reply = acc["reply"]
+            if reply is not None and reply.handled:
+                answer, offer, reasons, decision = _guard_delegated(acc["answer"], reply)
+                acc.update(answer=answer, guard=reasons, decision=decision)
+                _sync_bridge(principal, req, reply)
+                out.put(_sse("token", {"text": answer}))
+                if offer:
+                    out.put(_sse("offer", {
+                        "plugin": reply.plugin_name, "offer": offer,
+                        "escape_hatch": reply.escape_hatch,
+                        "next_action": reply.next_action,
+                        "status": reply.status}))
+            elif s.guardrails_enabled:
                 tail, verdict = guard.finish()
                 if tail:
                     out.put(_sse("token", {"text": tail}))
@@ -364,6 +458,18 @@ def suggest_followups(req: FollowupReq,
                       principal: Principal = Depends(require_principal)):
     return {"questions": followups(req.question, req.answer, req.hit_titles,
                                    OpenAILLM())}
+
+
+@app.post("/plugin/{plugin}/{action}")
+def plugin_action(plugin: str, action: str, body: dict,
+                  principal: Principal = Depends(require_principal)):
+    plugins = {p.name: p for p in load_plugins(get_settings(),
+                                               principal.tenant_id)}
+    found = plugins.get(plugin)
+    if found is None or action not in found.actions:
+        raise HTTPException(status_code=404, detail="unknown plugin action")
+    status, payload = found.actions[action](principal, body or {})
+    return JSONResponse(status_code=status, content=payload)
 
 
 @app.get("/")

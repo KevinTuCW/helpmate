@@ -52,6 +52,12 @@ class Settings(BaseSettings):
                              "tenant_isolation": 1.0,
                              "faithfulness": 0.7, "answer_relevancy": 0.7}
 
+    # conversation turn plugins
+    return_saver_url: str = ""
+    return_saver_api_key: str = ""
+    return_saver_api_keys: dict = {}
+    return_saver_timeout_s: float = 20.0
+
     # observability (Langfuse)
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
@@ -93,6 +99,12 @@ class Settings(BaseSettings):
         if self.router_provider == "siliconflow":
             return self.siliconflow_api_key
         return self.resolved_api_key()
+
+    def return_saver_key_for(self, tenant_id: str) -> str:
+        """Return Saver key for a tenant; blank means not enabled."""
+        if self.return_saver_api_keys:
+            return self.return_saver_api_keys.get(tenant_id, "")
+        return self.return_saver_api_key
 
     def embed_base_url(self) -> str:
         return self.siliconflow_base_url

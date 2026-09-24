@@ -63,6 +63,7 @@ helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线
               ├─ 知识类（主）─▶ retrieve 混合检索（按 tenant 过滤）─▶ rerank（Qwen3）─┐
               │      dense pgvector(HNSW) + sparse tsvector(GIN) → RRF 融合
               └─ 订单/物流（辅）─▶ act：query_order / query_logistics ─┤
+              └─ 插件委派（可选）─▶ delegate：外部系统逐字返回 ───────┘
                                                                        ▼
                     generate（GLM-4.7）─▶ 输出护栏 ─▶ 带[n]引用的答案 ─▶ 审计留痕 + 在线采样
 ```
@@ -70,6 +71,7 @@ helpmate 是一个能「上线」的企业知识库客服系统。<strong>主线
 - **模型分工**：判意图是二选一的分类，不是生成 —— 交给小模型（Qwen3-8B）比让 GLM-4.7 兼职划算，路由 p50 从 ~13s 降到 ~3s 而 golden 集路由准确率仍是 1.00。
 - **摄取路径**：`loaders → clean → chunking → pipeline → Qwen3 embed → Postgres`
 - **应答路径**：`护栏(in) → [多轮改写] → route → (act | retrieve → rerank) → generate → 护栏(out) → 审计`，由 LangGraph 编排，Langfuse 全程埋点。
+- **插件委派**：可选插件可独占一轮回复并绕过 `generate`。第一个实现是 Return Saver；未配置时图形状与工具 schema 都保持原样。
 
 > 详细系统设计见 [`docs/architecture.md`](docs/architecture.md)，产品需求见 [`docs/prd.md`](docs/prd.md)。
 
@@ -160,8 +162,9 @@ curl -X POST localhost:8000/chat -H 'X-API-Key: sk-dji-alice' \
 
 | event | data | 说明 |
 |---|---|---|
-| `stage` | `{"stage":"route"｜"retrieve"｜"retrieved"｜"act"｜"generate"}` | 节点**开工前**推送，是真实进度而非定时动画；`retrieved` 额外带 `count` |
+| `stage` | `{"stage":"route"｜"retrieve"｜"retrieved"｜"act"｜"delegate"｜"generate"}` | 节点**开工前**推送，是真实进度而非定时动画；`retrieved` 额外带 `count` |
 | `token` | `{"text":"…"}` | 答案增量。按**句子边界**成块吐出，不是逐字符 —— 见下 |
+| `offer` | `{"plugin":"return_saver","offer":{…},"escape_hatch":"…"}` | 插件报价卡；按钮走 `/plugin/{plugin}/{action}` 代理 |
 | `replace` | `{"text":"…"}` | 输出护栏终检判定拦截，客户端须把整条消息替换为此文案 |
 | `done` | `{"hits":[…],"tool_call":…,"guard":…}` | `hits` 只含 `{n,title,section,url}`，**不含正文** |
 | `error` | `{"message":"stream failed"}` | 上游失败；已吐出的文字保留 |
@@ -193,6 +196,32 @@ curl -X POST localhost:8000/suggest/followups \
 `data-api-key` 只适用于本地 demo —— 密钥写在页面上等于公开。生产应由服务端下发短期 token，本仓不实现。未配 `API_KEYS` 时走 dev 模式，`clone && run` 即可。
 
 会话语义：`session_id` 存 `localStorage`，刷新后上下文仍在（后端记着 `session_turns`，所以「那它续航呢」依然能指代）；但**对话内容不落浏览器存储**，刷新后面板是空的。挂件顶栏的「⋯」换新 `session_id`。
+
+## 对话轮次插件
+
+helpmate 可以把某一轮对话整段交给外部系统处理，回复逐字返回、绕过
+`generate` 节点。第一个实现是 Return Saver（退货挽留）。
+
+为什么不是“再注册一个工具”：现有工具产出的是 context，再由 `generate` 用
+RAG 提示词改写。对自带护栏的外部系统，改写会让输出扫描和签名凭证绑定到
+另一段文本或金额。
+
+三条保证：
+
+1. 未配置 `RETURN_SAVER_URL` 时，不加载插件 schema，图也不出现 `delegate` 节点。
+2. 外部系统超时、拒连、5xx 时，`/chat` 与 `/chat/stream` 落回 RAG，不返回 5xx。
+3. 除 `src/helpmate/plugins/return_saver.py` 外，helpmate 只认识通用概念：`plugin_sessions` 与 `/plugin/{plugin}/{action}`。
+
+启用：
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/004_plugin_sessions.sql
+
+RETURN_SAVER_URL=http://localhost:8001
+RETURN_SAVER_API_KEYS={"public": "sk-rs-public"}
+```
+
+key 按租户给。映射非空时不会回退到共享 key，避免未列出的租户静默借用别人的凭证。
 
 ## 📊 评测
 
