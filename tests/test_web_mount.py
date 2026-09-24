@@ -13,6 +13,7 @@ def test_index_serves_the_demo_site():
     r = c.get("/")
     assert r.status_code == 200
     assert "widget/index.js" in r.text
+    assert "widget/index.js?v=demo-customer-1" in r.text
 
 
 def test_widget_modules_are_mounted():
@@ -20,6 +21,16 @@ def test_widget_modules_are_mounted():
     for path in ("/widget/index.js", "/widget/api.js",
                  "/widget/ui.js", "/widget/style.css"):
         assert c.get(path).status_code == 200, path
+
+
+def test_widget_supports_local_demo_customer_url():
+    c = TestClient(app_mod.app)
+    index = c.get("/widget/index.js").text
+    assert "localDemoIdentity" in index
+    assert "C-(00[1-9]|010)" in index
+    assert "sim-${customer.toLowerCase()" in index
+    assert "localhost" in index
+    assert ": 'C-001'" in index
 
 
 def test_offer_controls_support_english_conversations():

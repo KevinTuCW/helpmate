@@ -22,6 +22,22 @@ const cfg = embedTag()?.dataset ?? {};
 const BASE = new URL(cfg.api || '/', location.href);
 const HERE = new URL('.', import.meta.url);
 
+// Local demo convenience: /?customer=C-001 selects one of the ten seeded
+// identities without putting a production credential in the host page.
+function localDemoIdentity() {
+  if (!['localhost', '127.0.0.1'].includes(location.hostname)) return null;
+  const requested = new URLSearchParams(location.search).get('customer')?.toUpperCase();
+  const customer = /^C-(00[1-9]|010)$/.test(requested || '') ? requested : 'C-001';
+  const previous = localStorage.getItem('helpmate.demo.customer');
+  if (previous !== customer) {
+    localStorage.removeItem('helpmate.session');
+    localStorage.setItem('helpmate.demo.customer', customer);
+  }
+  return { customer, apiKey: `sim-${customer.toLowerCase().replace('-', '')}` };
+}
+
+const demoIdentity = localDemoIdentity();
+
 const MOBILE = () => window.matchMedia('(max-width: 767px)').matches;
 const DISMISSED = 'helpmate.dismissed';
 // Names the assistant but keeps the answerable domain explicit — the knowledge
@@ -67,7 +83,7 @@ function mount() {
 }
 
 const shell = mount();
-const api = createApi({ base: BASE, apiKey: cfg.apiKey });
+const api = createApi({ base: BASE, apiKey: demoIdentity?.apiKey || cfg.apiKey });
 
 function open() {
   shell.panel.hidden = false;

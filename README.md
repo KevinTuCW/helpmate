@@ -123,6 +123,9 @@ make test        # 等价于 pytest -q
 
 打开 <http://localhost:8000>，问一个知识库问题，或者「我的订单 A1001 到哪了？」。
 
+本地 Return Saver 演示可通过 URL 选择种子客户，例如
+<http://localhost:8000/?customer=C-001>。支持 `C-001` 到 `C-010`；切换客户参数会自动开启新会话。该参数仅在 `localhost` / `127.0.0.1` 生效。
+
 ## 💬 使用示例
 
 ```bash
@@ -212,16 +215,62 @@ RAG 提示词改写。对自带护栏的外部系统，改写会让输出扫描�
 2. 外部系统超时、拒连、5xx 时，`/chat` 与 `/chat/stream` 落回 RAG，不返回 5xx。
 3. 除 `src/helpmate/plugins/return_saver.py` 外，helpmate 只认识通用概念：`plugin_sessions` 与 `/plugin/{plugin}/{action}`。
 
-启用：
+### 启用 Return Saver
+
+先启动 Return Saver。默认端口是 `8777`：
+
+```bash
+cd /Users/miaomiao/ai_projects/return-saver
+make install
+RS_STORE_BACKEND=postgres make run
+```
+
+首次使用 Helpmate 插件桥接时执行迁移：
 
 ```bash
 psql "$DATABASE_URL" -f db/migrations/004_plugin_sessions.sql
-
-RETURN_SAVER_URL=http://localhost:8001
-RETURN_SAVER_API_KEYS={"public": "sk-rs-public"}
 ```
 
-key 按租户给。映射非空时不会回退到共享 key，避免未列出的租户静默借用别人的凭证。
+单客户本地演示不需要在页面暴露 API key。Helpmate 使用 `C-001` 作为默认客户：
+
+```bash
+cd /Users/miaomiao/ai_projects/helpmate
+
+RETURN_SAVER_URL=http://127.0.0.1:8777 \
+RETURN_SAVER_API_KEY=rs-local-demo \
+RETURN_SAVER_TIMEOUT_S=60 \
+DEFAULT_TENANT=public \
+DEFAULT_CUSTOMER=C-001 \
+make run
+```
+
+`RETURN_SAVER_API_KEY` 必须非空，否则 Helpmate 不加载插件；Return Saver 本地 dev
+模式不会校验该占位值。真实 GLM 回复可能超过默认 20 秒，因此演示环境使用 60 秒。
+本地服务调用会忽略桌面 HTTP 代理，避免 localhost 被代理错误返回 503。
+
+需要在同一个页面切换 10 个种子客户时，为 Helpmate 配置演示身份：
+
+```bash
+API_KEYS='{"sim-c001":"public:C-001","sim-c002":"public:C-002","sim-c003":"public:C-003","sim-c004":"public:C-004","sim-c005":"public:C-005","sim-c006":"public:C-006","sim-c007":"public:C-007","sim-c008":"public:C-008","sim-c009":"public:C-009","sim-c010":"public:C-010"}' \
+RETURN_SAVER_URL=http://127.0.0.1:8777 \
+RETURN_SAVER_API_KEY=rs-local-demo \
+RETURN_SAVER_TIMEOUT_S=60 \
+make run
+```
+
+然后打开 <http://localhost:8000/?customer=C-001>。参数支持 `C-001` 到
+`C-010`，切换客户时挂件会自动创建新 session；无参数的 localhost 默认使用
+`C-001`。该便利入口只在 `localhost` / `127.0.0.1` 生效，生产环境不会根据 URL
+生成凭证。
+
+输入明确的英文或中文售后诉求会自动唤起 Return Saver。建议首轮同时给出订单号，
+例如 `The tee from ORD-1001 is too tight. Can you arrange a free size exchange?`，
+系统可在同一轮完成订单确认并返回 offer 卡。点击 **Accept** 才会调用
+`/plugin/return_saver/accept` 执行签名方案；点击 **I still want to return it**
+会立即进入标准退货。仅输入 `I accept` 不会执行 offer。
+
+生产环境使用 `RETURN_SAVER_API_KEYS={"tenant":"key"}` 按租户配置服务密钥。
+映射非空时不会回退到共享 key，避免未列出的租户静默借用其他租户凭证。
 
 ## 📊 评测
 
