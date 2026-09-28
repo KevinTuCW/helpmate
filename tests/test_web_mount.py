@@ -40,4 +40,8 @@ def test_offer_controls_support_english_conversations():
     assert "I still want to return it" in ui
     assert "Processing…" in ui
     assert "Accepted" in ui
+    assert "offer-final" in ui
+    assert "offer_token" in ui
     assert "onDecline: (message) => ask(message)" in index
+    assert "onExpired:" in index
+    assert "Please provide a new available option" in index

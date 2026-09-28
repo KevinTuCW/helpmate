@@ -77,6 +77,7 @@ def build_graph(
     delegate: Optional[Callable[[str, dict], PluginReply]] = None,
 ) -> "GraphRunner":
     schemas = TOOL_SCHEMAS + [p.tool_schema for p in plugins]
+    known_tools = {schema["function"]["name"] for schema in schemas}
     terminal_tools = {p.tool_name: p.name for p in plugins if p.terminal}
 
     def route(state: ChatState) -> ChatState:
@@ -129,7 +130,10 @@ def build_graph(
         call = state.get("tool_call")
         if not call:
             return "retrieve"
-        return "delegate" if call.get("name") in terminal_tools else "act"
+        name = call.get("name")
+        if name not in known_tools:
+            return "retrieve"
+        return "delegate" if name in terminal_tools else "act"
 
     g = StateGraph(ChatState)
     g.add_node("route", route)

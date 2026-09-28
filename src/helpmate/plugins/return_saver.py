@@ -5,7 +5,6 @@ shape. Everywhere else talks in generic plugin terms.
 """
 import logging
 import re
-import re
 from typing import Callable, Optional, TYPE_CHECKING
 
 import httpx
@@ -18,7 +17,6 @@ if TYPE_CHECKING:  # pragma: no cover
 log = logging.getLogger(__name__)
 
 ESCAPE_PHRASES = frozenset({"还是要退", "还是要退货", "我还是要退", "我还是要退货"})
-ORDER_ID_RE = re.compile(r"\bORD-[A-Za-z0-9-]+\b", re.IGNORECASE)
 ORDER_ID_RE = re.compile(r"\bORD-[A-Za-z0-9-]+\b", re.IGNORECASE)
 
 TOOL_SCHEMA = {
@@ -57,9 +55,6 @@ def negotiate(ctx: TurnContext, *, base: str, key: str, timeout: float,
         body["customer_id"] = ctx.customer_id
     if ctx.ext_session_id:
         body["session_id"] = ctx.ext_session_id
-    order_match = ORDER_ID_RE.search(ctx.question or "")
-    if order_match:
-        body["confirm_order_id"] = order_match.group(0).upper()
     order_match = ORDER_ID_RE.search(ctx.question or "")
     if order_match:
         body["confirm_order_id"] = order_match.group(0).upper()

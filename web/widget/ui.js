@@ -10,15 +10,19 @@ const STAGE_TEXT = {
   generate: '正在组织回答…',
 };
 
-export function renderOffer(mount, payload, { onAccept, onDecline }) {
+export function renderOffer(mount, payload, { onAccept, onDecline, onExpired }) {
   const sourceText = `${payload.offer.label || ''} ${payload.escape_hatch || ''}`;
   const english = !/[\u3400-\u9fff]/.test(sourceText) && /[A-Za-z]/.test(sourceText);
   const copy = english ? {
     fallback: 'Available option', accept: 'Accept', decline: 'I still want to return it',
-    processing: 'Processing…', accepted: 'Accepted', expired: 'Offer expired', currency: '$',
+    processing: 'Processing…', accepted: 'Accepted', declined: 'Return requested',
+    expiredButton: 'Expired', expired: 'This offer expired. I’m requesting a new option now…',
+    failed: 'This option could not be processed. Please ask the agent for a new option.', currency: '$',
   } : {
     fallback: '为你准备的方案', accept: '接受', decline: '还是要退',
-    processing: '处理中…', accepted: '已受理', expired: '方案已失效', currency: '¥',
+    processing: '处理中…', accepted: '已受理', declined: '已申请退货',
+    expiredButton: '已失效', expired: '方案已失效，正在为你重新获取可用方案…',
+    failed: '方案未能执行，请让客服重新提供方案。', currency: '¥',
   };
   const card = document.createElement('div');
   card.className = 'offer-card';
@@ -42,25 +46,56 @@ export function renderOffer(mount, payload, { onAccept, onDecline }) {
 
   const idem = crypto.randomUUID();
 
-  accept.addEventListener('click', async () => {
+  const status = document.createElement('div');
+  status.className = 'offer-status';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+
+  const lockCard = (selected) => {
+    card.classList.add('offer-final');
     accept.disabled = true;
     decline.disabled = true;
+    accept.setAttribute('aria-pressed', selected === 'accept' ? 'true' : 'false');
+    decline.setAttribute('aria-pressed', selected === 'decline' ? 'true' : 'false');
+  };
+
+  // Only the latest offer may be acted on. A newly rendered offer supersedes
+  // every older card in the conversation.
+  mount.querySelectorAll('.offer-card:not(.offer-final)').forEach((oldCard) => {
+    oldCard.classList.add('offer-final', 'offer-superseded');
+    oldCard.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+  });
+
+  accept.addEventListener('click', async () => {
+    lockCard('accept');
     accept.textContent = copy.processing;
-    const r = await onAccept({
-      offer_token: payload.offer.offer_token,
-      idempotency_key: idem,
-    });
-    if (r.ok || r.data.status === 'already_executed') {
-      card.classList.add('offer-done');
-      accept.textContent = copy.accepted;
-    } else {
-      accept.textContent = copy.expired;
-      decline.disabled = false;
+    try {
+      const r = await onAccept({
+        offer_token: payload.offer.offer_token,
+        idempotency_key: idem,
+      });
+      if (r.data.status === 'executed' || r.data.status === 'already_executed') {
+        card.classList.add('offer-done');
+        accept.textContent = copy.accepted;
+        status.textContent = copy.accepted;
+        return;
+      }
+      const expired = r.data?.guardrail?.code === 'TOKEN_EXPIRED'
+        || r.data?.next_action === 'reissue_offer';
+      card.classList.add(expired ? 'offer-expired' : 'offer-failed');
+      accept.textContent = expired ? copy.expiredButton : copy.accept;
+      status.textContent = expired ? copy.expired : (r.data?.detail || copy.failed);
+      if (expired) onExpired?.();
+    } catch {
+      card.classList.add('offer-failed');
+      accept.textContent = copy.accept;
+      status.textContent = copy.failed;
     }
   });
   decline.addEventListener('click', () => {
-    accept.disabled = true;
-    decline.disabled = true;
+    lockCard('decline');
+    decline.textContent = copy.declined;
+    status.textContent = copy.declined;
     onDecline(copy.decline);
   });
 
@@ -70,7 +105,7 @@ export function renderOffer(mount, payload, { onAccept, onDecline }) {
   escape.className = 'offer-escape';
   escape.textContent = payload.escape_hatch || '';
 
-  card.append(label, value, row, escape);
+  card.append(label, value, row, status, escape);
   mount.append(card);
   return card;
 }

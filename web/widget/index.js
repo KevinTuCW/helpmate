@@ -128,6 +128,7 @@ async function ask(question) {
       offer: (p) => view.showOffer(p, {
         onAccept: (body) => api.pluginAction(p.plugin, 'accept', body),
         onDecline: (message) => ask(message),
+        onExpired: () => ask('My return offer expired. Please provide a new available option.'),
       }),
       done: (d) => {
         const answer = view.finishAssistant(d.hits || []);

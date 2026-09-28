@@ -416,6 +416,8 @@ def _produce_turn(req: ChatReq, principal: Principal, out: queue.Queue) -> None:
             get_client().set_current_trace_io(input=req.question,
                                               output=acc["answer"])
     except Exception:
+        log.exception("streamed turn failed tenant=%s session=%s",
+                      tenant, req.session_id)
         out.put(_sse("error", {"message": "stream failed"}))
     finally:
         try:

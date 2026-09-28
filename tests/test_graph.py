@@ -44,6 +44,22 @@ def test_rag_path_when_no_tool_selected():
     assert state["hits"] == [{"content": "Cats sleep 15h.", "title": "Cat FAQ"}]
 
 
+class UnknownToolLLM(RagLLM):
+    def select_tool(self, q, schemas):
+        return {"name": "negotiate_return", "args": {}}
+
+
+def test_unknown_tool_falls_back_to_retrieval_instead_of_crashing():
+    run = build_graph(
+        retriever=lambda q: [{"content": "Cats sleep 15h.", "title": "Cat FAQ"}],
+        tool_dispatch=lambda name, args: (_ for _ in ()).throw(
+            AssertionError("unknown tools must never reach dispatch")),
+        llm=UnknownToolLLM(),
+    )
+    state = run("I need help")
+    assert state["answer"] == "About 15 hours [1]."
+
+
 class StreamLLM:
     def select_tool(self, q, schemas):
         return None
